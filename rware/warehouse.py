@@ -1,5 +1,6 @@
 from collections import OrderedDict
 from enum import Enum
+import time
 from typing import List, Tuple, Optional, Dict
 
 import gymnasium as gym
@@ -318,7 +319,7 @@ class Warehouse(gym.Env):
                 is_on_vertical_highway
                 or is_on_horizontal_highway
                 or is_on_delivery_row
-                or is_on_queue
+                #or is_on_queue
             )
 
         for x in range(self.grid_size[1]):
@@ -1041,14 +1042,16 @@ class Warehouse(gym.Env):
 
 
 if __name__ == "__main__":
-    env = Warehouse(9, 8, 3, 10, 3, 1, 5, None, None, RewardType.GLOBAL)
+    #env = Warehouse(3, 4, 2, 5, 3, 1, 5, None, None, RewardType.GLOBAL)
+    env = Warehouse(1, 3, 1, 2, 0, 1, 2, None, 500, RewardType.TWO_STAGE)
     env.reset()
     from tqdm import tqdm
 
-    # env.render()
+    env.render()
 
     for _ in tqdm(range(1000000)):
-        # time.sleep(0.05)
-        # env.render()
+        input("\nPress ENTER to step.")
+        env.render()
         actions = env.action_space.sample()
-        env.step(actions)
+        print(actions)
+        n_obs, reward, done, truncated, info = env.step(actions)
