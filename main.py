@@ -1,3 +1,7 @@
+# This module, when run, gets the "wrapped" RWARE environment (using torchrl_wrapper.py),
+# and using the hyperparemeters defined in this file, starts training a Policy using RL
+# to maximize the reward.
+
 from pathlib import Path
 
 import torch
