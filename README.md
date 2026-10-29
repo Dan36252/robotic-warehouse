@@ -1,3 +1,6 @@
+**This is a fork of RWARE, a robotics warehouse RL environment.**
+Credit: [https://github.com/semitable/robotic-warehouse](https://github.com/semitable/robotic-warehouse)
+
 <p align="center">
  <img width="350px" src="docs/img/rware.png" align="center" alt="Multi-Robot Warehouse (RWARE)" />
  <p align="center">A multi-agent reinforcement learning environment</p>
