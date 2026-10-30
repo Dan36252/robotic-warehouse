@@ -1,6 +1,6 @@
 from collections import OrderedDict
 from enum import Enum
-import time
+import time, math
 from typing import List, Tuple, Optional, Dict
 
 import gymnasium as gym
@@ -92,6 +92,7 @@ class Agent(Entity):
         self.carrying_shelf: Optional[Shelf] = None
         self.canceled_action = None
         self.has_delivered = False
+        self.target_distances = [] # Keeps track of distances to targets: [Station1, Station2, Package1, Package2, Package3, ...]
 
     @property
     def collision_layers(self):
@@ -430,7 +431,7 @@ class Warehouse(gym.Env):
     def _use_slow_obs(self):
         self.fast_obs = False
 
-        self._obs_bits_for_self = 4 + len(Direction)
+        self._obs_bits_for_self = 4 + len(Direction) + 2 + self.request_queue_size
         self._obs_bits_per_agent = 1 + len(Direction) + self.msg_bits
         self._obs_bits_per_shelf = 2
         self._obs_bits_for_requests = 2
@@ -442,6 +443,8 @@ class Warehouse(gym.Env):
             + self._obs_sensor_locations * self._obs_bits_per_agent
             + self._obs_sensor_locations * self._obs_bits_per_shelf
         )
+
+        self.max_dist = math.sqrt(self.grid_size[0]**2 + self.grid_size[1]**2) # Used for normalizing target distances
 
         max_grid_val = max(self.grid_size)
         low = np.zeros(2)
@@ -465,6 +468,7 @@ class Warehouse(gym.Env):
                     "carrying_shelf": gym.spaces.MultiBinary(1),
                     "direction": gym.spaces.Discrete(4),
                     "on_highway": gym.spaces.MultiBinary(1),
+                    "target_distances": gym.spaces.Box(0, self.max_dist, shape=(2+self.request_queue_size,))
                 }
             )
         )
@@ -625,7 +629,7 @@ class Warehouse(gym.Env):
         else:
             padded_agents = self.grid[_LAYER_AGENTS]
             padded_shelfs = self.grid[_LAYER_SHELFS]
-            
+
 
         agents = padded_agents[min_y:max_y, min_x:max_x].reshape(-1)
         shelfs = padded_shelfs[min_y:max_y, min_x:max_x].reshape(-1)
@@ -647,6 +651,8 @@ class Warehouse(gym.Env):
             direction[agent.dir.value] = 1.0
             obs.write(direction)
             obs.write([int(self._is_highway(agent.x, agent.y))])
+            if not self.max_dist: self.max_dist = 5
+            obs.write([round(d/self.max_dist, 2) for d in agent.target_distances])
 
             # 'has_agent': MultiBinary(1),
             # 'direction': Discrete(4),
@@ -689,6 +695,7 @@ class Warehouse(gym.Env):
             "carrying_shelf": [int(agent.carrying_shelf is not None)],
             "direction": agent.dir.value,
             "on_highway": [int(self._is_highway(agent.x, agent.y))],
+            "target_distances": [round(d/self.max_dist, 2) for d in agent.target_distances]
         }
         # --- sensor data
         obs["sensors"] = tuple({} for _ in range(self._obs_sensor_locations))
@@ -723,8 +730,10 @@ class Warehouse(gym.Env):
 
     def _make_obs(self, agent):
         if self.image_obs:
+            # The target_distances currently doesn't work with image observations
             return self._make_img_obs(agent)
         elif self.image_dict_obs:
+            # The target_distances currently doesn't work with image dictionary observations
             image_obs = self._make_img_obs(agent)
             feature_obs = _VectorWriter(
                 self.observation_space[agent.id - 1]["features"].shape[0]
@@ -755,6 +764,24 @@ class Warehouse(gym.Env):
 
         for a in self.agents:
             self.grid[_LAYER_AGENTS, a.y, a.x] = a.id
+
+    def _update_agent_target_distances(self):
+        # Update each agent's target_distances list, which tracks the agent's distance from each Station and each queued Package
+        for agent in self.agents:
+            target_distances = []
+
+            # Get agent's distance from each goal (Work Station)
+            for x, y in self.goals:
+                dist = round(math.sqrt((x - agent.x)**2 + (y - agent.y)**2), 2)
+                target_distances.append(dist)
+
+            # Get agent's distance from each requested Package (in the order queue)
+            for shelf in self.request_queue:
+                dist = round(math.sqrt((shelf.x - agent.x)**2 + (shelf.y - agent.y)**2), 2)
+                target_distances.append(dist)
+
+            # Update this agent's target_distances
+            agent.target_distances = target_distances
 
     def reset(self, seed=None, options=None):
         if seed is not None:
@@ -801,6 +828,8 @@ class Warehouse(gym.Env):
             )
         )
 
+        self._update_agent_target_distances()
+
         return tuple([self._make_obs(agent) for agent in self.agents]), self._get_info()
 
     def step(
@@ -808,11 +837,16 @@ class Warehouse(gym.Env):
     ) -> Tuple[List[np.ndarray], List[float], bool, bool, Dict]:
         assert len(actions) == len(self.agents)
 
+        # For each (agent, action) pair...
         for agent, action in zip(self.agents, actions):
+            # If environment uses "messages" between agents...
             if self.msg_bits > 0:
-                agent.req_action = Action(action[0])
+                # Update this agent's .req_action attribute. action[0] is an Action enum (action[1:] is the message bits).
+                agent.req_action = Action(action[0]) # This sets the agent's requested action based on input to step()
+                # Set each agent's message to be the message bits chosen by the input "action" to step()
                 agent.message[:] = action[1:]
             else:
+                # If message bits are not used, simply set the agent's requested action to the input action
                 agent.req_action = Action(action)
 
         # # stationary agents will certainly stay where they are
@@ -820,12 +854,16 @@ class Warehouse(gym.Env):
 
         # # forward agents will move only if they avoid collisions
         # forward_agents = [agent for agent in self.agents if agent.action == Action.FORWARD]
+
+        # This whole committed_agents and DirectionalGraph thing is to resolve collisions between agents and to finalize their
+        # locations after taking the given actions, whether that mean obeying the requested location or staying inoperational
         commited_agents = set()
 
         G = nx.DiGraph()
 
         for agent in self.agents:
             start = agent.x, agent.y
+            # target is this agent's next location, which is only different from start if its requested action is FORWARD
             target = agent.req_location(self.grid_size)
 
             if (
@@ -876,6 +914,9 @@ class Warehouse(gym.Env):
         for agent in failed_agents:
             assert agent.req_action == Action.FORWARD
             agent.req_action = Action.NOOP
+
+        # Now that the actions have been verified and finalized (making sure these actions won't result in collisions),
+        # we can update agents' position and give out rewards.
 
         rewards = np.zeros(self.n_agents)
 
@@ -928,6 +969,7 @@ class Warehouse(gym.Env):
                 self.agents[agent_id - 1].has_delivered = True
                 rewards[agent_id - 1] += 0.5
 
+        # Count the number of inactive steps (when agents move without delivering a single package)
         if shelf_delivered:
             self._cur_inactive_steps = 0
         else:
@@ -943,8 +985,14 @@ class Warehouse(gym.Env):
             done = False
         truncated = False
 
+        self._update_agent_target_distances()
+        #print(self.agents[0].target_distances[:2])
+
         new_obs = tuple([self._make_obs(agent) for agent in self.agents])
+        # Observations have length ~= N_AGENTS * (10 + MAX_QUEUE + SENSOR_RANGE ^ 2 * 6)
+        # The observation space proportional to WIDTH * LENGTH * SENSOR_RANGE * MAX_QUEUE (i think)
         info = self._get_info()
+        print(list(rewards))
         return new_obs, list(rewards), done, truncated, info
 
     def render(self):
@@ -1043,16 +1091,17 @@ class Warehouse(gym.Env):
 
 
 if __name__ == "__main__":
-    #env = Warehouse(3, 4, 2, 5, 3, 1, 5, None, None, RewardType.GLOBAL)
-    env = Warehouse(1, 3, 1, 2, 0, 1, 2, None, 500, RewardType.TWO_STAGE)
+    env = Warehouse(3, 4, 2, 1, 3, 1, 5, None, None, RewardType.GLOBAL)
+    #env = Warehouse(1, 3, 1, 2, 0, 1, 2, None, 500, RewardType.TWO_STAGE)
     env.reset()
     from tqdm import tqdm
 
     env.render()
 
     for _ in tqdm(range(1000000)):
-        input("\nPress ENTER to step.")
+        #input("\nPress ENTER to step.")
         env.render()
+        time.sleep(1)
         actions = env.action_space.sample()
-        print(actions)
         n_obs, reward, done, truncated, info = env.step(actions)
+        #print(n_obs[0])
