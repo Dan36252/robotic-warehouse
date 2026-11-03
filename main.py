@@ -23,7 +23,7 @@ N_AGENTS = 3
 MSG_BITS = 0
 
 env, nvec = make_centralized_env(
-   3, 3, 1, N_AGENTS, MSG_BITS, 1, 4, None, 500, RewardType.TWO_STAGE, device=device
+   3, 3, 1, N_AGENTS, MSG_BITS, 0, True, True, 4, None, 500, RewardType.TWO_STAGE, normalised_coordinates=True, device=device
 )
 obs_dim = env.observation_spec["observation"].shape[-1]
 action_dim = sum(nvec)
@@ -56,7 +56,7 @@ ENTROPY_COEF = 0.01
 LR = 3e-4
 MAX_GRAD_NORM = 1.0
 CHECKPOINT_EVERY = 50
-CHECKPOINT_DIR = Path("checkpoints5")
+CHECKPOINT_DIR = Path("checkpoints7")
 
 collector = Collector(
     env, policy, frames_per_batch=FRAMES_PER_BATCH, total_frames=TOTAL_FRAMES, device=device
@@ -154,4 +154,7 @@ checkpoints - The very first training run, with a huge warehouse and unoptimized
 checkpoints2 - Second training run, with same huge warehouse but slightly more optimized observation/action spaces
 checkpoints3 - Third training run, tiny warehouse: env(1, 3, 1, 2, 0, 1, 2, None, 500, RewardType.TWO_STAGE)
 checkpoints4 - Fourth training run, larger warehouse: env(3, 3, 1, 3, 0, 1, 4, None, 500, RewardType.TWO_STAGE)
+checkpoints5 - Fifth training run, same size warehouse as #4, but with distances from targets in each agent's observations
+checkpoints6 - Sixth training run, same size but request_queue_size=7, and with target distances AND target coordinates in observations
+checkpoints7 - Seventh training run, same warehouse but sensor_range=0 and request_queue_size=4 (with target dist & coords)
 """

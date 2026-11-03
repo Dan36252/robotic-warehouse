@@ -153,6 +153,8 @@ class Warehouse(gym.Env):
         n_agents: int,
         msg_bits: int,
         sensor_range: int,
+        include_target_distances: bool,
+        include_target_coords: bool,
         request_queue_size: int,
         max_inactivity_steps: Optional[int],
         max_steps: Optional[int],
@@ -244,6 +246,8 @@ class Warehouse(gym.Env):
         self.n_agents = n_agents
         self.msg_bits = msg_bits
         self.sensor_range = sensor_range
+        self.include_target_distances = include_target_distances
+        self.include_target_coords = include_target_coords
         self.max_inactivity_steps: Optional[int] = max_inactivity_steps
         self.reward_type = reward_type
         self.reward_range = (0, 1)
@@ -431,7 +435,10 @@ class Warehouse(gym.Env):
     def _use_slow_obs(self):
         self.fast_obs = False
 
-        self._obs_bits_for_self = 4 + len(Direction) + 2 + self.request_queue_size
+        target_distances_bits = 2 + self.request_queue_size
+        target_coords_bits = (2 + self.request_queue_size) * 2
+
+        self._obs_bits_for_self = 4 + len(Direction) + target_distances_bits + target_coords_bits
         self._obs_bits_per_agent = 1 + len(Direction) + self.msg_bits
         self._obs_bits_per_shelf = 2
         self._obs_bits_for_requests = 2
@@ -446,13 +453,13 @@ class Warehouse(gym.Env):
 
         self.max_dist = math.sqrt(self.grid_size[0]**2 + self.grid_size[1]**2) # Used for normalizing target distances
 
-        max_grid_val = max(self.grid_size)
+        self.max_grid_val = max(self.grid_size)
         low = np.zeros(2)
         if self.normalised_coordinates:
             high = np.ones(2)
             dtype = np.float32
         else:
-            high = np.ones(2) * max_grid_val
+            high = np.ones(2) * self.max_grid_val
             dtype = np.int32
         location_space = gym.spaces.Box(
             low=low,
@@ -461,17 +468,24 @@ class Warehouse(gym.Env):
             dtype=dtype,
         )
 
-        self_observation_dict_space = gym.spaces.Dict(
-            OrderedDict(
+        observation_dict = OrderedDict(
                 {
                     "location": location_space,
                     "carrying_shelf": gym.spaces.MultiBinary(1),
                     "direction": gym.spaces.Discrete(4),
                     "on_highway": gym.spaces.MultiBinary(1),
-                    "target_distances": gym.spaces.Box(0, self.max_dist, shape=(2+self.request_queue_size,))
                 }
             )
-        )
+        
+        self.target_dist_scale = self.max_dist if not self.normalised_coordinates else 1
+        if self.include_target_distances:
+            observation_dict["target_distances"] = gym.spaces.Box(0, self.target_dist_scale, shape=(target_distances_bits,))
+        
+        self.target_coords_scale = high[0]
+        if self.include_target_coords:
+            observation_dict["target_coords"] = gym.spaces.Box(0, self.target_coords_scale, shape=(target_coords_bits,))
+
+        self_observation_dict_space = gym.spaces.Dict(observation_dict)
         sensor_per_location_dict = OrderedDict(
             {
                 "has_agent": gym.spaces.MultiBinary(1),
@@ -651,8 +665,23 @@ class Warehouse(gym.Env):
             direction[agent.dir.value] = 1.0
             obs.write(direction)
             obs.write([int(self._is_highway(agent.x, agent.y))])
-            if not self.max_dist: self.max_dist = 5
-            obs.write([round(d/self.max_dist, 2) for d in agent.target_distances])
+
+            dist_divisor = self.max_dist if self.normalised_coordinates else 1
+            if self.include_target_distances:
+                obs.write([round(d/dist_divisor, 2) for d in agent.target_distances])
+
+            coord_divisor = self.max_grid_val if self.normalised_coordinates else 1
+            if self.include_target_coords:
+                obs.write([
+                    round(self.goals[0][0]/coord_divisor, 3),
+                    round(self.goals[0][1]/coord_divisor, 3),
+                    round(self.goals[1][0]/coord_divisor, 3),
+                    round(self.goals[1][1]/coord_divisor, 3)
+                    ])
+                package_coords = []
+                for pkg in self.request_queue:
+                    package_coords.extend([round(pkg.x/coord_divisor, 3), round(pkg.y/coord_divisor, 3)])
+                obs.write(package_coords)
 
             # 'has_agent': MultiBinary(1),
             # 'direction': Discrete(4),
@@ -694,11 +723,26 @@ class Warehouse(gym.Env):
             "location": np.array([agent_x, agent_y], dtype=np.int32),
             "carrying_shelf": [int(agent.carrying_shelf is not None)],
             "direction": agent.dir.value,
-            "on_highway": [int(self._is_highway(agent.x, agent.y))],
-            "target_distances": [round(d/self.max_dist, 2) for d in agent.target_distances]
+            "on_highway": [int(self._is_highway(agent.x, agent.y))]
         }
+
+        dist_divisor = self.max_dist if self.normalised_coordinates else 1
+        if self.include_target_distances:
+            obs["self"]["target_distances"] = [round(d/dist_divisor, 2) for d in agent.target_distances]
         # --- sensor data
         obs["sensors"] = tuple({} for _ in range(self._obs_sensor_locations))
+
+        coord_divisor = self.max_grid_val if self.normalised_coordinates else 1
+        if self.include_target_coords:
+            target_coords = [
+                    round(self.goals[0][0]/coord_divisor, 3),
+                    round(self.goals[0][1]/coord_divisor, 3),
+                    round(self.goals[1][0]/coord_divisor, 3),
+                    round(self.goals[1][1]/coord_divisor, 3)
+                    ]
+            for pkg in self.request_queue:
+                target_coords.extend([round(pkg.x/coord_divisor, 3), round(pkg.y/coord_divisor, 3)])
+            obs["self"]["target_coords"] = target_coords
 
         # find neighboring agents
         for i, id_ in enumerate(agents):
@@ -992,7 +1036,6 @@ class Warehouse(gym.Env):
         # Observations have length ~= N_AGENTS * (10 + MAX_QUEUE + SENSOR_RANGE ^ 2 * 6)
         # The observation space proportional to WIDTH * LENGTH * SENSOR_RANGE * MAX_QUEUE (i think)
         info = self._get_info()
-        print(list(rewards))
         return new_obs, list(rewards), done, truncated, info
 
     def render(self):
@@ -1091,8 +1134,8 @@ class Warehouse(gym.Env):
 
 
 if __name__ == "__main__":
-    env = Warehouse(3, 4, 2, 1, 3, 1, 5, None, None, RewardType.GLOBAL)
-    #env = Warehouse(1, 3, 1, 2, 0, 1, 2, None, 500, RewardType.TWO_STAGE)
+    env = Warehouse(3, 4, 2, 1, 3, 1, True, True, 5, None, None, RewardType.GLOBAL, normalised_coordinates=True)
+    #env = Warehouse(1, 3, 1, 2, 0, 1, True, True, 2, None, 500, RewardType.TWO_STAGE)
     env.reset()
     from tqdm import tqdm
 
