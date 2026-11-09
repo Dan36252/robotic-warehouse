@@ -324,7 +324,7 @@ class Warehouse(gym.Env):
                 is_on_vertical_highway
                 or is_on_horizontal_highway
                 or is_on_delivery_row
-                #or is_on_queue
+                or is_on_queue
             )
 
         for x in range(self.grid_size[1]):
@@ -1134,7 +1134,7 @@ class Warehouse(gym.Env):
 
 
 if __name__ == "__main__":
-    env = Warehouse(3, 4, 2, 1, 3, 1, True, True, 5, None, None, RewardType.GLOBAL, normalised_coordinates=True)
+    env = Warehouse(3, 8, 1, 2, 0, 1, True, True, 2, None, None, RewardType.GLOBAL, normalised_coordinates=True)
     #env = Warehouse(1, 3, 1, 2, 0, 1, True, True, 2, None, 500, RewardType.TWO_STAGE)
     env.reset()
     from tqdm import tqdm
