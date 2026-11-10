@@ -43,6 +43,11 @@ class Direction(Enum):
     LEFT = 2
     RIGHT = 3
 
+class Mission(Enum):
+    GET_PACKAGE = 0
+    DELIVER_PACKAGE = 1
+    RETURN_PACKAGE = 2
+
 
 class RewardType(Enum):
     GLOBAL = 0
@@ -93,6 +98,8 @@ class Agent(Entity):
         self.canceled_action = None
         self.has_delivered = False
         self.target_distances = [] # Keeps track of distances to targets: [Station1, Station2, Package1, Package2, Package3, ...]
+        self.current_mission: Mission = Mission.GET_PACKAGE
+        #self.reached_target = False # Flag for reward purposes, to prevent agent from abusing idle standing on a target location
 
     @property
     def collision_layers(self):
@@ -267,6 +274,7 @@ class Warehouse(gym.Env):
 
         self.request_queue_size = request_queue_size
         self.request_queue = []
+        self.empty_shelf_coords = []
 
         self.agents: List[Agent] = []
 
@@ -809,6 +817,15 @@ class Warehouse(gym.Env):
         for a in self.agents:
             self.grid[_LAYER_AGENTS, a.y, a.x] = a.id
 
+    def _get_empty_shelve_coords(self):
+        # Make sure to call this before calling _update_agent_target_distances() and _get_agent_dist_rewards() in the step() method
+        shelf_coords = []
+        for y in range(self.grid_size[0]):
+            for x in range(self.grid_size[1]):
+                if (not self._is_highway(x, y)) and (self.grid[_LAYER_SHELFS, x, y] == 0):
+                    shelf_coords.append((x, y))
+        return shelf_coords
+
     def _update_agent_target_distances(self):
         # Update each agent's target_distances list, which tracks the agent's distance from each Station and each queued Package
         for agent in self.agents:
@@ -826,6 +843,31 @@ class Warehouse(gym.Env):
 
             # Update this agent's target_distances
             agent.target_distances = target_distances
+
+    def _get_agent_dist_rewards(self):
+        # Must be called after calling _update_agent_target_distances() in the environment's step() method
+        n_stations = len(self.goals)
+
+        agent_dist_rewards = []
+        for agent in self.agents:
+            if agent.reached_target:
+                agent_dist_rewards.append(0)
+                continue
+
+            distances = agent.target_distances[:n_stations] if not agent.carrying_shelf is None else agent.target_distances[n_stations:]
+
+            agent_dist_reward = 0
+            for dist in distances:
+                if dist == 0:
+                    agent.reached_target = True
+                    dist = 0.25
+                r = 0.2 / (dist) - 0.2
+                agent_dist_reward += r
+            agent_dist_reward = agent_dist_reward / len(distances)
+
+            agent_dist_rewards.append(agent_dist_reward)
+
+        return agent_dist_rewards
 
     def reset(self, seed=None, options=None):
         if seed is not None:
@@ -974,11 +1016,19 @@ class Warehouse(gym.Env):
             elif agent.req_action in [Action.LEFT, Action.RIGHT]:
                 agent.dir = agent.req_direction()
             elif agent.req_action == Action.TOGGLE_LOAD and not agent.carrying_shelf:
+                #agent.reached_target = False
                 shelf_id = self.grid[_LAYER_SHELFS, agent.y, agent.x]
                 if shelf_id:
                     agent.carrying_shelf = self.shelfs[shelf_id - 1]
+                    if agent.carrying_shelf in self.request_queue:
+                        agent.current_mission = Mission.DELIVER_PACKAGE
+                    else:
+                        agent.current_mission = Mission.RETURN_PACKAGE
+                        rewards[agent.id - 1] -= 5.0  # PENALTY for picking up unrequested package
             elif agent.req_action == Action.TOGGLE_LOAD and agent.carrying_shelf:
+                #agent.reached_target = False
                 if not self._is_highway(agent.x, agent.y):
+                    agent.current_mission = Mission.GET_PACKAGE
                     agent.carrying_shelf = None
                     if agent.has_delivered and self.reward_type == RewardType.TWO_STAGE:
                         rewards[agent.id - 1] += 0.5
@@ -986,6 +1036,7 @@ class Warehouse(gym.Env):
                     agent.has_delivered = False
 
         self._recalc_grid()
+        self.empty_shelf_coords = self._get_empty_shelve_coords()
 
         shelf_delivered = False
         for y, x in self.goals:
@@ -998,6 +1049,8 @@ class Warehouse(gym.Env):
                 continue
             # a shelf was successfully delived.
             shelf_delivered = True
+            agent_id = self.grid[_LAYER_AGENTS, x, y]
+            self.agents[agent_id - 1].current_mission = Mission.GET_PACKAGE
             # remove from queue and replace it
             candidates = [s for s in self.shelfs if s not in self.request_queue]
             new_request = self.np_random.choice(candidates)
@@ -1006,10 +1059,8 @@ class Warehouse(gym.Env):
             if self.reward_type == RewardType.GLOBAL:
                 rewards += 1
             elif self.reward_type == RewardType.INDIVIDUAL:
-                agent_id = self.grid[_LAYER_AGENTS, x, y]
                 rewards[agent_id - 1] += 1
             elif self.reward_type == RewardType.TWO_STAGE:
-                agent_id = self.grid[_LAYER_AGENTS, x, y]
                 self.agents[agent_id - 1].has_delivered = True
                 rewards[agent_id - 1] += 0.5
 
@@ -1030,7 +1081,11 @@ class Warehouse(gym.Env):
         truncated = False
 
         self._update_agent_target_distances()
+        for i, r in enumerate(self._get_agent_dist_rewards()):
+            rewards[i] += r
         #print(self.agents[0].target_distances[:2])
+        print()
+        print(rewards[0])
 
         new_obs = tuple([self._make_obs(agent) for agent in self.agents])
         # Observations have length ~= N_AGENTS * (10 + MAX_QUEUE + SENSOR_RANGE ^ 2 * 6)
@@ -1134,17 +1189,37 @@ class Warehouse(gym.Env):
 
 
 if __name__ == "__main__":
-    env = Warehouse(3, 8, 1, 2, 0, 1, True, True, 2, None, None, RewardType.GLOBAL, normalised_coordinates=True)
+    env = Warehouse(3, 8, 1, 1, 0, 1, True, True, 2, None, None, RewardType.GLOBAL, normalised_coordinates=True)
     #env = Warehouse(1, 3, 1, 2, 0, 1, True, True, 2, None, 500, RewardType.TWO_STAGE)
     env.reset()
     from tqdm import tqdm
 
     env.render()
 
+    from pyglet.window import key
+
+    current_action = Action.NOOP
+
+    def on_key_press(symbol, modifiers):
+        global current_action
+        if symbol == key.W:
+            current_action = Action.FORWARD
+        elif symbol == key.A:
+            current_action = Action.LEFT
+        elif symbol == key.D:
+            current_action = Action.RIGHT
+        elif symbol == key.R:
+            current_action = Action.TOGGLE_LOAD
+
+    env.renderer.window.on_key_press = on_key_press
+
     for _ in tqdm(range(1000000)):
         #input("\nPress ENTER to step.")
         env.render()
-        time.sleep(1)
-        actions = env.action_space.sample()
+        time.sleep(0.1)
+        #actions = env.action_space.sample()
+        actions = list(env.action_space.sample())
+        actions[0] = current_action.value
         n_obs, reward, done, truncated, info = env.step(actions)
+        current_action = Action.NOOP
         #print(n_obs[0])

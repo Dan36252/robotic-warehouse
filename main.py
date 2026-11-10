@@ -19,11 +19,35 @@ from rware.warehouse import RewardType
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # --- environment ---
+SHELF_COLUMNS = 3
+COLUMN_HEIGHT = 8
+SHELF_ROWS = 1
 N_AGENTS = 2
 MSG_BITS = 0
+SENSOR_RANGE = 0
+INCLUDE_TARGET_DISTANCES = False
+INCLUDE_TARGET_COORDS = True
+REQUEST_QUEUE_SIZE = 2
+MAX_INACTIVITY_STEPS = None
+MAX_STEPS = 2000
+REWARD_TYPE = RewardType.TWO_STAGE
+NORMALISED_COORDINATES = True
 
 env, nvec = make_centralized_env(
-   3, 8, 1, N_AGENTS, MSG_BITS, 1, True, True, 2, None, 2000, RewardType.TWO_STAGE, normalised_coordinates=True, device=device
+    SHELF_COLUMNS,
+    COLUMN_HEIGHT,
+    SHELF_ROWS,
+    N_AGENTS,
+    MSG_BITS,
+    SENSOR_RANGE,
+    INCLUDE_TARGET_DISTANCES,
+    INCLUDE_TARGET_COORDS,
+    REQUEST_QUEUE_SIZE,
+    MAX_INACTIVITY_STEPS,
+    MAX_STEPS,
+    REWARD_TYPE,
+    normalised_coordinates=NORMALISED_COORDINATES,
+    device=device,
 )
 obs_dim = env.observation_spec["observation"].shape[-1]
 action_dim = sum(nvec)
