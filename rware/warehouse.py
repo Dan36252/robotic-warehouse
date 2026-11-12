@@ -96,9 +96,12 @@ class Agent(Entity):
         self.req_action: Optional[Action] = None
         self.carrying_shelf: Optional[Shelf] = None
         self.canceled_action = None
-        self.has_delivered = False
+        self.can_take_order = True
         self.target_distances = [] # Keeps track of distances to targets: [Station1, Station2, Package1, Package2, Package3, ...]
         self.current_mission: Mission = Mission.GET_PACKAGE
+        self.stood_still = False
+        self.steps_stood_still = 0
+        self.steps_since_success = 0
         #self.reached_target = False # Flag for reward purposes, to prevent agent from abusing idle standing on a target location
 
     @property
@@ -249,6 +252,7 @@ class Warehouse(gym.Env):
             self._make_layout_from_params(shelf_columns, shelf_rows, column_height)
         else:
             self._make_layout_from_str(layout)
+        self.max_dist = math.sqrt(self.grid_size[0]**2 + self.grid_size[1]**2)
 
         self.n_agents = n_agents
         self.msg_bits = msg_bits
@@ -819,12 +823,16 @@ class Warehouse(gym.Env):
 
     def _get_empty_shelve_coords(self):
         # Make sure to call this before calling _update_agent_target_distances() and _get_agent_dist_rewards() in the step() method
-        shelf_coords = []
+        empty_coords = []
+        shelf_coords = {(s.x, s.y) for s in self.shelfs}
         for y in range(self.grid_size[0]):
             for x in range(self.grid_size[1]):
-                if (not self._is_highway(x, y)) and (self.grid[_LAYER_SHELFS, x, y] == 0):
-                    shelf_coords.append((x, y))
-        return shelf_coords
+                if (not self._is_highway(x, y)) and ((x, y) not in shelf_coords): #(self.grid[_LAYER_SHELFS, x, y] == 0):
+                    empty_coords.append((x, y))
+        return empty_coords
+    
+    def _get_empty_shelve_distances(self, agent_x, agent_y):
+        return [round(math.sqrt((agent_x - t[0])**2 + (agent_y - t[1])**2) / self.max_dist, 2) for t in self._get_empty_shelve_coords()]
 
     def _update_agent_target_distances(self):
         # Update each agent's target_distances list, which tracks the agent's distance from each Station and each queued Package
@@ -833,37 +841,48 @@ class Warehouse(gym.Env):
 
             # Get agent's distance from each goal (Work Station)
             for x, y in self.goals:
-                dist = round(math.sqrt((x - agent.x)**2 + (y - agent.y)**2), 2)
+                dist = round(math.sqrt((x - agent.x)**2 + (y - agent.y)**2) / self.max_dist, 2)
                 target_distances.append(dist)
 
             # Get agent's distance from each requested Package (in the order queue)
             for shelf in self.request_queue:
-                dist = round(math.sqrt((shelf.x - agent.x)**2 + (shelf.y - agent.y)**2), 2)
+                dist = round(math.sqrt((shelf.x - agent.x)**2 + (shelf.y - agent.y)**2) / self.max_dist, 2)
                 target_distances.append(dist)
 
             # Update this agent's target_distances
             agent.target_distances = target_distances
 
     def _get_agent_dist_rewards(self):
-        # Must be called after calling _update_agent_target_distances() in the environment's step() method
+        # Must be called after calling _update_agent_target_distances() in the environment's step() method.
+        # This method rewards each agent based on its distance from its target locations, which are
+        # determined by its current_mission attribute.
         n_stations = len(self.goals)
 
         agent_dist_rewards = []
         for agent in self.agents:
-            if agent.reached_target:
+
+            if agent.stood_still:
                 agent_dist_rewards.append(0)
                 continue
 
-            distances = agent.target_distances[:n_stations] if not agent.carrying_shelf is None else agent.target_distances[n_stations:]
+            if agent.current_mission == Mission.GET_PACKAGE:
+                distances = agent.target_distances[n_stations:]
+            elif agent.current_mission == Mission.DELIVER_PACKAGE:
+                distances = agent.target_distances[:n_stations]
+            elif agent.current_mission == Mission.RETURN_PACKAGE:
+                distances = self._get_empty_shelve_distances(agent.x, agent.y)
 
             agent_dist_reward = 0
+            len_distances = max(1, len(distances))
             for dist in distances:
                 if dist == 0:
-                    agent.reached_target = True
-                    dist = 0.25
-                r = 0.2 / (dist) - 0.2
+                    dist = 0.02
+                r = min(0.01 / (dist**3 * 2 * len_distances), 1) if dist < 0.4 else 0
                 agent_dist_reward += r
-            agent_dist_reward = agent_dist_reward / len(distances)
+            if agent_dist_reward == 0 or len(distances) == 0:
+                agent_dist_rewards.append(-0.1)
+                continue
+            #agent_dist_reward = -0.05 / (agent_dist_reward / max(len(distances), 1))
 
             agent_dist_rewards.append(agent_dist_reward)
 
@@ -1007,7 +1026,21 @@ class Warehouse(gym.Env):
         rewards = np.zeros(self.n_agents)
 
         for agent in self.agents:
+            prev_x, prev_y = agent.prev_x, agent.prev_y
             agent.prev_x, agent.prev_y = agent.x, agent.y
+
+            agent.stood_still = False
+            if (agent.x == prev_x and agent.y == prev_y):
+                if not (agent.req_action == Action.TOGGLE_LOAD and agent.steps_stood_still == 0):
+                    rewards[agent.id - 1] = -0.2 # PENALTY for staying in place
+                    agent.stood_still = True
+                agent.steps_stood_still += 1
+            else:
+                agent.steps_stood_still = 0
+                
+
+            agent.steps_since_success += 1
+            rewards[agent.id - 1] -= (agent.steps_since_success * 0.0001)
 
             if agent.req_action == Action.FORWARD:
                 agent.x, agent.y = agent.req_location(self.grid_size)
@@ -1022,18 +1055,25 @@ class Warehouse(gym.Env):
                     agent.carrying_shelf = self.shelfs[shelf_id - 1]
                     if agent.carrying_shelf in self.request_queue:
                         agent.current_mission = Mission.DELIVER_PACKAGE
+                        if agent.can_take_order:
+                            rewards[agent.id - 1] += 25.0 # Reward for picking up requested package!
+                            agent.steps_since_success = 0
+                        agent.can_take_order = False
                     else:
                         agent.current_mission = Mission.RETURN_PACKAGE
                         rewards[agent.id - 1] -= 5.0  # PENALTY for picking up unrequested package
             elif agent.req_action == Action.TOGGLE_LOAD and agent.carrying_shelf:
                 #agent.reached_target = False
                 if not self._is_highway(agent.x, agent.y):
-                    agent.current_mission = Mission.GET_PACKAGE
                     agent.carrying_shelf = None
-                    if agent.has_delivered and self.reward_type == RewardType.TWO_STAGE:
-                        rewards[agent.id - 1] += 0.5
+                    if agent.current_mission == Mission.RETURN_PACKAGE:
+                        if not agent.can_take_order:
+                            agent.can_take_order = True
+                            rewards[agent.id - 1] += 25.0 # Reward for returning package to racks!
+                            agent.steps_since_success = 0
+                    agent.current_mission = Mission.GET_PACKAGE
 
-                    agent.has_delivered = False
+
 
         self._recalc_grid()
         self.empty_shelf_coords = self._get_empty_shelve_coords()
@@ -1050,19 +1090,22 @@ class Warehouse(gym.Env):
             # a shelf was successfully delived.
             shelf_delivered = True
             agent_id = self.grid[_LAYER_AGENTS, x, y]
-            self.agents[agent_id - 1].current_mission = Mission.GET_PACKAGE
+            agent = self.agents[agent_id - 1]
+            agent.current_mission = Mission.RETURN_PACKAGE
             # remove from queue and replace it
             candidates = [s for s in self.shelfs if s not in self.request_queue]
             new_request = self.np_random.choice(candidates)
             self.request_queue[self.request_queue.index(shelf)] = new_request
             # also reward the agents
             if self.reward_type == RewardType.GLOBAL:
-                rewards += 1
+                rewards += 40.0
+                agent.steps_since_success = 0
             elif self.reward_type == RewardType.INDIVIDUAL:
-                rewards[agent_id - 1] += 1
+                rewards[agent_id - 1] += 40.0
+                agent.steps_since_success = 0
             elif self.reward_type == RewardType.TWO_STAGE:
-                self.agents[agent_id - 1].has_delivered = True
-                rewards[agent_id - 1] += 0.5
+                rewards[agent_id - 1] += 40.0 # Reward for delivering package!!
+                agent.steps_since_success = 0
 
         # Count the number of inactive steps (when agents move without delivering a single package)
         if shelf_delivered:
@@ -1084,8 +1127,12 @@ class Warehouse(gym.Env):
         for i, r in enumerate(self._get_agent_dist_rewards()):
             rewards[i] += r
         #print(self.agents[0].target_distances[:2])
-        print()
-        print(rewards[0])
+        # print("Agent 0 reward:")
+        # print(rewards[0])
+        # print("Empty shelf coordinates:")
+        # print(self._get_empty_shelve_coords())
+        # print("Agent 0 empty shelf distances:")
+        # print(self._get_empty_shelve_distances(self.agents[0].x, self.agents[0].y))
 
         new_obs = tuple([self._make_obs(agent) for agent in self.agents])
         # Observations have length ~= N_AGENTS * (10 + MAX_QUEUE + SENSOR_RANGE ^ 2 * 6)
@@ -1216,7 +1263,7 @@ if __name__ == "__main__":
     for _ in tqdm(range(1000000)):
         #input("\nPress ENTER to step.")
         env.render()
-        time.sleep(0.1)
+        time.sleep(0.5)
         #actions = env.action_space.sample()
         actions = list(env.action_space.sample())
         actions[0] = current_action.value

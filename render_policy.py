@@ -9,6 +9,7 @@ with set_exploration_type(ExplorationType.DETERMINISTIC), torch.no_grad():
         time.sleep(0.25)
         observation_dict = main.policy(observation_dict)
         observation_dict = main.env.step(observation_dict)
+        print(observation_dict["action"])
         if observation_dict["next", "done"].item():
             break
         observation_dict = step_mdp(observation_dict)

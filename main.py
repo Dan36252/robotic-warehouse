@@ -29,7 +29,7 @@ INCLUDE_TARGET_DISTANCES = False
 INCLUDE_TARGET_COORDS = True
 REQUEST_QUEUE_SIZE = 2
 MAX_INACTIVITY_STEPS = None
-MAX_STEPS = 2000
+MAX_STEPS = 3000
 REWARD_TYPE = RewardType.TWO_STAGE
 NORMALISED_COORDINATES = True
 
@@ -53,7 +53,8 @@ obs_dim = env.observation_spec["observation"].shape[-1]
 action_dim = sum(nvec)
 
 # --- policy and value networks ---
-actor_net = MLP(in_features=obs_dim, out_features=action_dim, depth=2, num_cells=256, device=device)
+actor_net = MLP(in_features=obs_dim, out_features=action_dim, depth=4, num_cells=512, device=device)
+#actor_net = MLP(in_features=obs_dim, out_features=action_dim, depth=2, num_cells=256, device=device)
 policy_module = TensorDictModule(actor_net, in_keys=["observation"], out_keys=["logits"])
 policy = ProbabilisticActor(
     module=policy_module,
@@ -80,7 +81,7 @@ ENTROPY_COEF = 0.01
 LR = 3e-4
 MAX_GRAD_NORM = 1.0
 CHECKPOINT_EVERY = 50
-CHECKPOINT_DIR = Path("checkpoints7")
+CHECKPOINT_DIR = Path("checkpoints9")
 
 collector = Collector(
     env, policy, frames_per_batch=FRAMES_PER_BATCH, total_frames=TOTAL_FRAMES, device=device
@@ -181,4 +182,7 @@ checkpoints4 - Fourth training run, larger warehouse: env(3, 3, 1, 3, 0, 1, 4, N
 checkpoints5 - Fifth training run, same size warehouse as #4, but with distances from targets in each agent's observations
 checkpoints6 - Sixth training run, same size but request_queue_size=7, and with target distances AND target coordinates in observations
 checkpoints7 - Seventh training run, same warehouse but sensor_range=0 and request_queue_size=4 (with target dist & coords)
+checkpoints8 - Eight training run; group standard Small warehouse; agents rewarded like "hot and cold", as they approach target locations. Only target_coords, not target_distances (environment)
+checkpoints9 - Ninth training run; larger Actor net; improved reward rules (prevent agents from standing still)
+checkpoints10 - Tenth training run; improved reward rules (prevent agents from walking back and forth past packages)
 """
