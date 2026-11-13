@@ -81,7 +81,7 @@ ENTROPY_COEF = 0.01
 LR = 3e-4
 MAX_GRAD_NORM = 1.0
 CHECKPOINT_EVERY = 50
-CHECKPOINT_DIR = Path("checkpoints9")
+CHECKPOINT_DIR = Path("checkpoints12")
 
 collector = Collector(
     env, policy, frames_per_batch=FRAMES_PER_BATCH, total_frames=TOTAL_FRAMES, device=device
@@ -185,4 +185,6 @@ checkpoints7 - Seventh training run, same warehouse but sensor_range=0 and reque
 checkpoints8 - Eight training run; group standard Small warehouse; agents rewarded like "hot and cold", as they approach target locations. Only target_coords, not target_distances (environment)
 checkpoints9 - Ninth training run; larger Actor net; improved reward rules (prevent agents from standing still)
 checkpoints10 - Tenth training run; improved reward rules (prevent agents from walking back and forth past packages)
+checkpoints11 - Eleventh training run; tuning rewards to enable turning
+checkpoints12 - Twelfth training run; delta-based proximity reward. (Positive reward if agent comes closer to target; negative reward if agent moves farther from target)
 """

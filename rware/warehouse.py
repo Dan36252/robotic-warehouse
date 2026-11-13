@@ -98,6 +98,9 @@ class Agent(Entity):
         self.canceled_action = None
         self.can_take_order = True
         self.target_distances = [] # Keeps track of distances to targets: [Station1, Station2, Package1, Package2, Package3, ...]
+        self.prev_target_distances = []
+        self.empty_distances = []
+        self.prev_empty_distances = []
         self.current_mission: Mission = Mission.GET_PACKAGE
         self.stood_still = False
         self.steps_stood_still = 0
@@ -448,7 +451,10 @@ class Warehouse(gym.Env):
         self.fast_obs = False
 
         target_distances_bits = 2 + self.request_queue_size
-        target_coords_bits = (2 + self.request_queue_size) * 2
+        # + self.n_agents accounts for the fixed-size block of nearest-empty-shelf-slot
+        # coordinates (used for the RETURN_PACKAGE mission), independent of how many
+        # empty slots actually exist at any given time.
+        target_coords_bits = (2 + self.request_queue_size + self.n_agents) * 2
 
         self._obs_bits_for_self = 4 + len(Direction) + target_distances_bits + target_coords_bits
         self._obs_bits_per_agent = 1 + len(Direction) + self.msg_bits
@@ -695,6 +701,11 @@ class Warehouse(gym.Env):
                     package_coords.extend([round(pkg.x/coord_divisor, 3), round(pkg.y/coord_divisor, 3)])
                 obs.write(package_coords)
 
+                empty_coords = []
+                for ex, ey in self._get_nearest_empty_shelf_coords(agent.x, agent.y, self.n_agents):
+                    empty_coords.extend([round(ex/coord_divisor, 3), round(ey/coord_divisor, 3)])
+                obs.write(empty_coords)
+
             # 'has_agent': MultiBinary(1),
             # 'direction': Discrete(4),
             # 'local_message': MultiBinary(2)
@@ -754,6 +765,8 @@ class Warehouse(gym.Env):
                     ]
             for pkg in self.request_queue:
                 target_coords.extend([round(pkg.x/coord_divisor, 3), round(pkg.y/coord_divisor, 3)])
+            for ex, ey in self._get_nearest_empty_shelf_coords(agent.x, agent.y, self.n_agents):
+                target_coords.extend([round(ex/coord_divisor, 3), round(ey/coord_divisor, 3)])
             obs["self"]["target_coords"] = target_coords
 
         # find neighboring agents
@@ -824,7 +837,8 @@ class Warehouse(gym.Env):
     def _get_empty_shelve_coords(self):
         # Make sure to call this before calling _update_agent_target_distances() and _get_agent_dist_rewards() in the step() method
         empty_coords = []
-        shelf_coords = {(s.x, s.y) for s in self.shelfs}
+        carrying_coords = {(a.x, a.y) for a in self.agents if a.carrying_shelf}
+        shelf_coords = {(s.x, s.y) for s in self.shelfs if not (s.x, s.y) in carrying_coords}
         for y in range(self.grid_size[0]):
             for x in range(self.grid_size[1]):
                 if (not self._is_highway(x, y)) and ((x, y) not in shelf_coords): #(self.grid[_LAYER_SHELFS, x, y] == 0):
@@ -833,6 +847,21 @@ class Warehouse(gym.Env):
     
     def _get_empty_shelve_distances(self, agent_x, agent_y):
         return [round(math.sqrt((agent_x - t[0])**2 + (agent_y - t[1])**2) / self.max_dist, 2) for t in self._get_empty_shelve_coords()]
+
+    def _get_nearest_empty_shelf_coords(self, agent_x, agent_y, k):
+        # Returns the k empty shelf slots nearest to (agent_x, agent_y), padded with the
+        # nearest slot's own coordinates if fewer than k empty slots exist, so callers
+        # always get a fixed-length result regardless of how many slots are free.
+        empty_coords = self._get_empty_shelve_coords()
+        if not empty_coords:
+            return [(agent_x, agent_y)] * k
+        ranked = sorted(
+            empty_coords, key=lambda t: (agent_x - t[0]) ** 2 + (agent_y - t[1]) ** 2
+        )
+        nearest = ranked[:k]
+        if len(nearest) < k:
+            nearest += [nearest[-1]] * (k - len(nearest))
+        return nearest
 
     def _update_agent_target_distances(self):
         # Update each agent's target_distances list, which tracks the agent's distance from each Station and each queued Package
@@ -849,10 +878,18 @@ class Warehouse(gym.Env):
                 dist = round(math.sqrt((shelf.x - agent.x)**2 + (shelf.y - agent.y)**2) / self.max_dist, 2)
                 target_distances.append(dist)
 
+            # Get agent's distance from each empty shelf location
+            empty_distances = self._get_empty_shelve_distances(agent.x, agent.y)
+
             # Update this agent's target_distances
+            agent.prev_target_distances = agent.target_distances
             agent.target_distances = target_distances
 
-    def _get_agent_dist_rewards(self):
+            # Update this agent's empty_distances
+            agent.prev_empty_distances = agent.empty_distances
+            agent.empty_distances = empty_distances
+
+    def _get_agent_dist_rewards(self, use_delta_rewards=True):
         # Must be called after calling _update_agent_target_distances() in the environment's step() method.
         # This method rewards each agent based on its distance from its target locations, which are
         # determined by its current_mission attribute.
@@ -861,26 +898,38 @@ class Warehouse(gym.Env):
         agent_dist_rewards = []
         for agent in self.agents:
 
-            if agent.stood_still:
-                agent_dist_rewards.append(0)
-                continue
+            # if agent.stood_still:
+            #     agent_dist_rewards.append(0)
+            #     continue
 
             if agent.current_mission == Mission.GET_PACKAGE:
                 distances = agent.target_distances[n_stations:]
+                prev_distances = distances if agent.prev_target_distances == [] else agent.prev_target_distances[n_stations:]
             elif agent.current_mission == Mission.DELIVER_PACKAGE:
                 distances = agent.target_distances[:n_stations]
+                prev_distances = distances if agent.prev_target_distances == [] else agent.prev_target_distances[:n_stations]
             elif agent.current_mission == Mission.RETURN_PACKAGE:
-                distances = self._get_empty_shelve_distances(agent.x, agent.y)
+                distances = agent.empty_distances
+                prev_distances = distances if agent.prev_empty_distances == [] else agent.prev_empty_distances
 
             agent_dist_reward = 0
             len_distances = max(1, len(distances))
-            for dist in distances:
+            for dist, prev_dist in zip(distances, prev_distances):
                 if dist == 0:
-                    dist = 0.02
-                r = min(0.01 / (dist**3 * 2 * len_distances), 1) if dist < 0.4 else 0
+                    dist = 0.001
+                if prev_dist - dist == 0:
+                    continue
+                if use_delta_rewards:
+                    # Reward is positive if agent comes closer to target; negative if walks farther away from target
+                    r = (1/(dist+0.15)) * ((prev_dist - dist) / (len_distances * abs(prev_dist - dist)))
+                else:
+                    # Reward is an absolute function of the agent's position; higher when closer to target
+                    #r = min(0.01 / (dist**3 * 2 * len_distances), 1) if dist < 0.4 else 0
+                    r = min(0.2 / (dist * 2 * len_distances), 3) if dist < 0.4 else 0
                 agent_dist_reward += r
+            # This exists to force loop to continue before updating agent_dist_reward as seen in the comment after this if statement
             if agent_dist_reward == 0 or len(distances) == 0:
-                agent_dist_rewards.append(-0.1)
+                agent_dist_rewards.append(0)
                 continue
             #agent_dist_reward = -0.05 / (agent_dist_reward / max(len(distances), 1))
 
@@ -1024,6 +1073,8 @@ class Warehouse(gym.Env):
         # we can update agents' position and give out rewards.
 
         rewards = np.zeros(self.n_agents)
+        shelf_coords = {(s.x, s.y) for s in self.shelfs}
+        requested_coords = {(s.x, s.y) for s in self.request_queue}
 
         for agent in self.agents:
             prev_x, prev_y = agent.prev_x, agent.prev_y
@@ -1031,12 +1082,18 @@ class Warehouse(gym.Env):
 
             agent.stood_still = False
             if (agent.x == prev_x and agent.y == prev_y):
-                if not (agent.req_action == Action.TOGGLE_LOAD and agent.steps_stood_still == 0):
-                    rewards[agent.id - 1] = -0.2 # PENALTY for staying in place
+                if not (((agent.req_action == Action.LEFT or agent.req_action == Action.RIGHT) and agent.steps_stood_still < 2) or (agent.req_action == Action.TOGGLE_LOAD and agent.steps_stood_still < 1)): # not (agent.req_action == Action.TOGGLE_LOAD and agent.steps_stood_still == 0):
+                    rewards[agent.id - 1] = -0.1 # PENALTY for staying in place
                     agent.stood_still = True
                 agent.steps_stood_still += 1
             else:
                 agent.steps_stood_still = 0
+            # if agent.req_action == Action.NOOP:
+            #     rewards[agent.id - 1] = -0.1 # PENALTY for staying in place
+            #     agent.stood_still = True
+            #     agent.steps_stood_still += 1
+            # else:
+            #     agent.steps_stood_still = 0
                 
 
             agent.steps_since_success += 1
@@ -1247,6 +1304,18 @@ if __name__ == "__main__":
 
     current_action = Action.NOOP
 
+    def render_step():
+        global current_action
+        env.render()
+        time.sleep(0.25)
+        #input()
+        #actions = env.action_space.sample()
+        actions = list(env.action_space.sample())
+        actions[0] = current_action.value
+        n_obs, reward, done, truncated, info = env.step(actions)
+        current_action = Action.NOOP
+        #print(n_obs[0])
+
     def on_key_press(symbol, modifiers):
         global current_action
         if symbol == key.W:
@@ -1257,16 +1326,11 @@ if __name__ == "__main__":
             current_action = Action.RIGHT
         elif symbol == key.R:
             current_action = Action.TOGGLE_LOAD
+        # elif symbol == key.Space:
+        #     current_action = Action.NOOP
+        #render_step()
 
     env.renderer.window.on_key_press = on_key_press
 
-    for _ in tqdm(range(1000000)):
-        #input("\nPress ENTER to step.")
-        env.render()
-        time.sleep(0.5)
-        #actions = env.action_space.sample()
-        actions = list(env.action_space.sample())
-        actions[0] = current_action.value
-        n_obs, reward, done, truncated, info = env.step(actions)
-        current_action = Action.NOOP
-        #print(n_obs[0])
+    for _ in tqdm(range(1000)):
+        render_step()
