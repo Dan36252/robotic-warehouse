@@ -492,7 +492,7 @@ class Warehouse(gym.Env):
 
         observation_dict = OrderedDict(
                 {
-                    #"location": location_space,
+                    "location": location_space,
                     "carrying_shelf": gym.spaces.MultiBinary(1),
                     "direction": gym.spaces.Discrete(4),
                     "on_highway": gym.spaces.MultiBinary(1),
@@ -698,8 +698,8 @@ class Warehouse(gym.Env):
                 agent_x = agent.x
                 agent_y = agent.y
 
-            # obs.write([agent_x, agent_y, int(agent.carrying_shelf is not None)])
-            obs.write([int(agent.carrying_shelf is not None)])
+            obs.write([agent_x, agent_y, int(agent.carrying_shelf is not None)])
+            #obs.write([int(agent.carrying_shelf is not None)])
             direction = np.zeros(4)
             direction[agent.dir.value] = 1.0
             obs.write(direction)
@@ -766,7 +766,7 @@ class Warehouse(gym.Env):
             agent_y = agent.y
         # --- self data
         obs["self"] = {
-            #"location": np.array([agent_x, agent_y], dtype=np.int32),
+            "location": np.array([agent_x, agent_y], dtype=np.int32),
             "carrying_shelf": [int(agent.carrying_shelf is not None)],
             "direction": agent.dir.value,
             "on_highway": [int(self._is_highway(agent.x, agent.y))]
@@ -1156,7 +1156,7 @@ class Warehouse(gym.Env):
 
             agent.steps_since_success += 1
             #rewards[agent.id - 1] -= (agent.steps_since_success * 0.0001)
-            rewards[agent.id - 1] -= 0.005  # Constant per-step penalty
+            #rewards[agent.id - 1] -= 0.005  # Constant per-step penalty
 
             if agent.req_action == Action.FORWARD:
                 agent.x, agent.y = agent.req_location(self.grid_size)
@@ -1177,7 +1177,7 @@ class Warehouse(gym.Env):
                         agent.can_take_order = False
                     else:
                         agent.current_mission = Mission.RETURN_PACKAGE
-                        rewards[agent.id - 1] -= 5.0  # PENALTY for picking up unrequested package
+                        #rewards[agent.id - 1] -= 5.0  # PENALTY for picking up unrequested package
             elif agent.req_action == Action.TOGGLE_LOAD and agent.carrying_shelf:
                 #agent.reached_target = False
                 if not self._is_highway(agent.x, agent.y):
@@ -1245,8 +1245,8 @@ class Warehouse(gym.Env):
 
         self._update_agent_cur_targets()
         self._update_cur_target_distances()
-        for i, r in enumerate(self._get_single_target_rewards()):
-            rewards[i] += r
+        #for i, r in enumerate(self._get_single_target_rewards()):
+            #rewards[i] += r
         
         for agent in self.agents:
             agent.prev_mission = agent.current_mission
@@ -1382,7 +1382,7 @@ if __name__ == "__main__":
         actions[0] = current_action.value
         n_obs, reward, done, truncated, info = env.step(actions)
         current_action = Action.NOOP
-        print(n_obs[0])
+        #print(n_obs[0])
 
     def on_key_press(symbol, modifiers):
         global current_action

@@ -26,13 +26,13 @@ GAMMA = 0.999  # defined early so the env's reward normalizer and GAE can share 
 # SHELF_ROWS = 1
 # N_AGENTS = 2
 SHELF_COLUMNS = 1
-COLUMN_HEIGHT = 6
+COLUMN_HEIGHT = 3
 SHELF_ROWS = 1
 N_AGENTS = 2
 MSG_BITS = 0
 SENSOR_RANGE = 1
 INCLUDE_TARGET_DISTANCES = False
-INCLUDE_TARGET_COORDS = True
+INCLUDE_TARGET_COORDS = False
 REQUEST_QUEUE_SIZE = 2
 MAX_INACTIVITY_STEPS = None
 MAX_STEPS = 3000
@@ -87,7 +87,7 @@ ENTROPY_COEF = 0.01
 LR = 3e-4
 MAX_GRAD_NORM = 1.0
 CHECKPOINT_EVERY = 50
-CHECKPOINT_DIR = Path("checkpoints16")
+CHECKPOINT_DIR = Path("checkpoints20")
 
 collector = Collector(
     env, policy, frames_per_batch=FRAMES_PER_BATCH, total_frames=TOTAL_FRAMES, device=device
@@ -203,4 +203,9 @@ checkpoints12 - Twelfth training run; delta-based proximity reward. (Positive re
 checkpoints13 - Thirteenth training run; potential-based delta proximity reward, sensor_range=1, GAMMA & LAMBDA set higher to consider more future rewards, constant per-step penalty, reward normalization
 checkpoints14 - Fourteenth training run; added relative target coords; Just random experiments, trying to get something that works
 checkpoints15 - Fifteenth training run; changed warehouse layout, changed observation vectors, changed reward system
+checkpoints16 - Sixteenth training run; same as 15, but with bug fixes
+checkpoints17 - Seventeenth training run; same as 16, just one reward change
+checkpoints18 - No distance based rewards
+checkpoints19 - Back to purely sparse rewards
+checkpoints20 - Back to default observations
 """
