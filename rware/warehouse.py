@@ -1,6 +1,6 @@
 from collections import OrderedDict
 from enum import Enum
-import time, math
+import time, math, random
 from typing import List, Tuple, Optional, Dict
 
 import gymnasium as gym
@@ -102,6 +102,10 @@ class Agent(Entity):
         self.empty_distances = []
         self.prev_empty_distances = []
         self.current_mission: Mission = Mission.GET_PACKAGE
+        self.prev_mission: Mission = Mission.RETURN_PACKAGE
+        self.cur_target = (0, 0)
+        self.cur_target_dist = 0
+        self.prev_target_dist = 0
         self.stood_still = False
         self.steps_stood_still = 0
         self.steps_since_success = 0
@@ -339,7 +343,7 @@ class Warehouse(gym.Env):
                 is_on_vertical_highway
                 or is_on_horizontal_highway
                 or is_on_delivery_row
-                or is_on_queue
+                #or is_on_queue
             )
 
         for x in range(self.grid_size[1]):
@@ -454,7 +458,7 @@ class Warehouse(gym.Env):
         # + self.n_agents accounts for the fixed-size block of nearest-empty-shelf-slot
         # coordinates (used for the RETURN_PACKAGE mission), independent of how many
         # empty slots actually exist at any given time.
-        target_coords_bits = (2 + self.request_queue_size + self.n_agents) * 2
+        target_coords_bits = 2 #(2 + self.request_queue_size + self.n_agents) * 2
 
         self._obs_bits_for_self = 4 + len(Direction) + target_distances_bits + target_coords_bits
         self._obs_bits_per_agent = 1 + len(Direction) + self.msg_bits
@@ -488,10 +492,10 @@ class Warehouse(gym.Env):
 
         observation_dict = OrderedDict(
                 {
-                    "location": location_space,
-                    "carrying_shelf": gym.spaces.MultiBinary(1),
-                    "direction": gym.spaces.Discrete(4),
-                    "on_highway": gym.spaces.MultiBinary(1),
+                    #"location": location_space,
+                    #"carrying_shelf": gym.spaces.MultiBinary(1),
+                    #"direction": gym.spaces.Discrete(4),
+                    #"on_highway": gym.spaces.MultiBinary(1),
                 }
             )
         
@@ -631,6 +635,22 @@ class Warehouse(gym.Env):
                 obs = np.rot90(obs, k=1, axes=(1, 2))
             # no rotation needed for UP direction
         return obs
+    
+    def _get_cur_target_coords(self, agent):
+        #divisor = self.max_dist if self.normalised_coordinates else 1
+        if agent.current_mission == Mission.GET_PACKAGE:
+            # Get a random requested package's coordinates
+            chosen_box = self.request_queue[random.randint(0, len(self.request_queue)-1)]
+            return (chosen_box.x, chosen_box.y)#((chosen_box.x - agent.x)/divisor, (chosen_box.y - agent.y)/divisor)
+        elif agent.current_mission == Mission.DELIVER_PACKAGE:
+            # Get a random work station's coordinates
+            g = random.randint(0, 1)
+            return (self.goals[g][0], self.goals[g][1])#((self.goals[g][0] - agent.x)/divisor, (self.goals[g][1] - agent.y)/divisor)
+        else:
+            # Get the nearest empty shelf's coordinates
+            coords = self._get_nearest_empty_shelf_coords(agent.x, agent.y, 1)[0]
+            return (coords[0], coords[1])#((coords[0] - agent.x)/divisor, (coords[1] - agent.y)/divisor)
+
 
     def _get_default_obs(self, agent):
         min_x = agent.x - self.sensor_range
@@ -678,11 +698,11 @@ class Warehouse(gym.Env):
                 agent_x = agent.x
                 agent_y = agent.y
 
-            obs.write([agent_x, agent_y, int(agent.carrying_shelf is not None)])
-            direction = np.zeros(4)
-            direction[agent.dir.value] = 1.0
-            obs.write(direction)
-            obs.write([int(self._is_highway(agent.x, agent.y))])
+            # obs.write([agent_x, agent_y, int(agent.carrying_shelf is not None)])
+            # direction = np.zeros(4)
+            # direction[agent.dir.value] = 1.0
+            # obs.write(direction)
+            # obs.write([int(self._is_highway(agent.x, agent.y))])
 
             dist_divisor = self.max_dist if self.normalised_coordinates else 1
             if self.include_target_distances:
@@ -690,21 +710,23 @@ class Warehouse(gym.Env):
 
             coord_divisor = self.max_grid_val if self.normalised_coordinates else 1
             if self.include_target_coords:
-                obs.write([
-                    round(self.goals[0][0]/coord_divisor, 3) - agent_x,
-                    round(self.goals[0][1]/coord_divisor, 3) - agent_y,
-                    round(self.goals[1][0]/coord_divisor, 3) - agent_x,
-                    round(self.goals[1][1]/coord_divisor, 3) - agent_y
-                    ])
-                package_coords = []
-                for pkg in self.request_queue:
-                    package_coords.extend([round(pkg.x/coord_divisor, 3) - agent_x, round(pkg.y/coord_divisor, 3) - agent_y])
-                obs.write(package_coords)
+                target = self._get_cur_target_coords(agent)
+                obs.write([target[0], target[1]])
+                # obs.write([
+                #     round(self.goals[0][0]/coord_divisor, 3) - agent_x,
+                #     round(self.goals[0][1]/coord_divisor, 3) - agent_y,
+                #     round(self.goals[1][0]/coord_divisor, 3) - agent_x,
+                #     round(self.goals[1][1]/coord_divisor, 3) - agent_y
+                #     ])
+                # package_coords = []
+                # for pkg in self.request_queue:
+                #     package_coords.extend([round(pkg.x/coord_divisor, 3) - agent_x, round(pkg.y/coord_divisor, 3) - agent_y])
+                # obs.write(package_coords)
 
-                empty_coords = []
-                for ex, ey in self._get_nearest_empty_shelf_coords(agent.x, agent.y, self.n_agents):
-                    empty_coords.extend([round(ex/coord_divisor, 3) - agent_x, round(ey/coord_divisor, 3) - agent_y])
-                obs.write(empty_coords)
+                # empty_coords = []
+                # for ex, ey in self._get_nearest_empty_shelf_coords(agent.x, agent.y, self.n_agents):
+                #     empty_coords.extend([round(ex/coord_divisor, 3) - agent_x, round(ey/coord_divisor, 3) - agent_y])
+                # obs.write(empty_coords)
 
             # 'has_agent': MultiBinary(1),
             # 'direction': Discrete(4),
@@ -742,12 +764,12 @@ class Warehouse(gym.Env):
             agent_x = agent.x
             agent_y = agent.y
         # --- self data
-        obs["self"] = {
-            "location": np.array([agent_x, agent_y], dtype=np.int32),
-            "carrying_shelf": [int(agent.carrying_shelf is not None)],
-            "direction": agent.dir.value,
-            "on_highway": [int(self._is_highway(agent.x, agent.y))]
-        }
+        # obs["self"] = {
+        #     "location": np.array([agent_x, agent_y], dtype=np.int32),
+        #     "carrying_shelf": [int(agent.carrying_shelf is not None)],
+        #     "direction": agent.dir.value,
+        #     "on_highway": [int(self._is_highway(agent.x, agent.y))]
+        # }
 
         dist_divisor = self.max_dist if self.normalised_coordinates else 1
         if self.include_target_distances:
@@ -757,16 +779,18 @@ class Warehouse(gym.Env):
 
         coord_divisor = self.max_grid_val if self.normalised_coordinates else 1
         if self.include_target_coords:
-            target_coords = [
-                    round(self.goals[0][0]/coord_divisor, 3) - agent_x,
-                    round(self.goals[0][1]/coord_divisor, 3) - agent_y,
-                    round(self.goals[1][0]/coord_divisor, 3) - agent_x,
-                    round(self.goals[1][1]/coord_divisor, 3) - agent_y
-                    ]
-            for pkg in self.request_queue:
-                target_coords.extend([round(pkg.x/coord_divisor, 3) - agent_x, round(pkg.y/coord_divisor, 3) - agent_y])
-            for ex, ey in self._get_nearest_empty_shelf_coords(agent.x, agent.y, self.n_agents):
-                target_coords.extend([round(ex/coord_divisor, 3) - agent_x, round(ey/coord_divisor, 3) - agent_y])
+            target = self._get_cur_target_coords(agent)
+            target_coords = [target[0], target[1]]
+            # target_coords = [
+            #         round(self.goals[0][0]/coord_divisor, 3) - agent_x,
+            #         round(self.goals[0][1]/coord_divisor, 3) - agent_y,
+            #         round(self.goals[1][0]/coord_divisor, 3) - agent_x,
+            #         round(self.goals[1][1]/coord_divisor, 3) - agent_y
+            #         ]
+            # for pkg in self.request_queue:
+            #     target_coords.extend([round(pkg.x/coord_divisor, 3) - agent_x, round(pkg.y/coord_divisor, 3) - agent_y])
+            # for ex, ey in self._get_nearest_empty_shelf_coords(agent.x, agent.y, self.n_agents):
+            #     target_coords.extend([round(ex/coord_divisor, 3) - agent_x, round(ey/coord_divisor, 3) - agent_y])
             obs["self"]["target_coords"] = target_coords
 
         # find neighboring agents
@@ -862,6 +886,26 @@ class Warehouse(gym.Env):
         if len(nearest) < k:
             nearest += [nearest[-1]] * (k - len(nearest))
         return nearest
+    
+    def _update_agent_cur_targets(self):
+        for agent in self.agents:
+            requested = {(b.x, b.y) for b in self.request_queue}
+            empty = set(self._get_empty_shelve_coords())
+            cur = (agent.cur_target[0], agent.cur_target[1])
+
+            no_longer_empty = (agent.current_mission == Mission.RETURN_PACKAGE and cur not in empty)
+            no_longer_requested = (agent.current_mission == Mission.GET_PACKAGE and cur not in requested)
+
+            if agent.current_mission != agent.prev_mission or no_longer_empty or no_longer_requested:
+                agent.cur_target = self._get_cur_target_coords(agent)
+
+    def _update_cur_target_distances(self):
+        for agent in self.agents:
+            cur_target = agent.cur_target
+            divisor = self.max_dist if self.normalised_coordinates else 1
+            cur_dist = math.sqrt((cur_target[0] - agent.x)**2 + (cur_target[1] - agent.y)**2) / divisor
+            agent.prev_target_dist = agent.cur_target_dist
+            agent.cur_target_dist = cur_dist
 
     def _update_agent_target_distances(self):
         # Update each agent's target_distances list, which tracks the agent's distance from each Station and each queued Package
@@ -888,6 +932,14 @@ class Warehouse(gym.Env):
             # Update this agent's empty_distances
             agent.prev_empty_distances = agent.empty_distances
             agent.empty_distances = empty_distances
+
+    def _get_single_target_rewards(self):
+        rewards = []
+        for agent in self.agents:
+            r = 5 * (agent.prev_target_dist - agent.cur_target_dist)
+            rewards.append(r)
+        return rewards
+
 
     def _get_agent_dist_rewards(self, use_delta_rewards=True):
         # Must be called after calling _update_agent_target_distances() in the environment's step() method.
@@ -1087,7 +1139,7 @@ class Warehouse(gym.Env):
             agent.stood_still = False
             if (agent.x == prev_x and agent.y == prev_y):
                 if not (((agent.req_action == Action.LEFT or agent.req_action == Action.RIGHT) and agent.steps_stood_still < 2) or (agent.req_action == Action.TOGGLE_LOAD and agent.steps_stood_still < 1)): # not (agent.req_action == Action.TOGGLE_LOAD and agent.steps_stood_still == 0):
-                    rewards[agent.id - 1] = -0.1 # PENALTY for staying in place
+                    #rewards[agent.id - 1] = -0.1 # PENALTY for staying in place
                     agent.stood_still = True
                 agent.steps_stood_still += 1
             else:
@@ -1102,7 +1154,7 @@ class Warehouse(gym.Env):
 
             agent.steps_since_success += 1
             #rewards[agent.id - 1] -= (agent.steps_since_success * 0.0001)
-            #rewards[agent.id - 1] -= 0.005  # Constant per-step penalty
+            rewards[agent.id - 1] -= 0.005  # Constant per-step penalty
 
             if agent.req_action == Action.FORWARD:
                 agent.x, agent.y = agent.req_location(self.grid_size)
@@ -1118,7 +1170,7 @@ class Warehouse(gym.Env):
                     if agent.carrying_shelf in self.request_queue:
                         agent.current_mission = Mission.DELIVER_PACKAGE
                         if agent.can_take_order:
-                            rewards[agent.id - 1] += 25.0 # Reward for picking up requested package!
+                            rewards[agent.id - 1] += 5.0 # Reward for picking up requested package!
                             agent.steps_since_success = 0
                         agent.can_take_order = False
                     else:
@@ -1131,7 +1183,7 @@ class Warehouse(gym.Env):
                     if agent.current_mission == Mission.RETURN_PACKAGE:
                         if not agent.can_take_order:
                             agent.can_take_order = True
-                            rewards[agent.id - 1] += 25.0 # Reward for returning package to racks!
+                            rewards[agent.id - 1] += 5.0 # Reward for returning package to racks!
                             agent.steps_since_success = 0
                     agent.current_mission = Mission.GET_PACKAGE
 
@@ -1160,13 +1212,13 @@ class Warehouse(gym.Env):
             self.request_queue[self.request_queue.index(shelf)] = new_request
             # also reward the agents
             if self.reward_type == RewardType.GLOBAL:
-                rewards += 40.0
+                rewards += 10.0
                 agent.steps_since_success = 0
             elif self.reward_type == RewardType.INDIVIDUAL:
-                rewards[agent_id - 1] += 40.0
+                rewards[agent_id - 1] += 10.0
                 agent.steps_since_success = 0
             elif self.reward_type == RewardType.TWO_STAGE:
-                rewards[agent_id - 1] += 40.0 # Reward for delivering package!!
+                rewards[agent_id - 1] += 10.0 # Reward for delivering package!!
                 agent.steps_since_success = 0
 
         # Count the number of inactive steps (when agents move without delivering a single package)
@@ -1185,9 +1237,18 @@ class Warehouse(gym.Env):
             done = False
         truncated = False
 
-        self._update_agent_target_distances()
-        for i, r in enumerate(self._get_agent_dist_rewards()):
+        #self._update_agent_target_distances()
+        # for i, r in enumerate(self._get_agent_dist_rewards()):
+        #     rewards[i] += r
+
+        self._update_agent_cur_targets()
+        self._update_cur_target_distances()
+        for i, r in enumerate(self._get_single_target_rewards()):
             rewards[i] += r
+        
+        for agent in self.agents:
+            agent.prev_mission = agent.current_mission
+
         #print(self.agents[0].target_distances[:2])
         # print("Agent 0 reward:")
         # print(rewards[0])
@@ -1298,7 +1359,7 @@ class Warehouse(gym.Env):
 
 
 if __name__ == "__main__":
-    env = Warehouse(3, 4, 1, 1, 0, 1, True, True, 1, None, None, RewardType.GLOBAL, normalised_coordinates=True)
+    env = Warehouse(3, 4, 1, 1, 0, 1, False, True, 1, None, None, RewardType.GLOBAL, normalised_coordinates=True)
     #env = Warehouse(1, 3, 1, 2, 0, 1, True, True, 2, None, 500, RewardType.TWO_STAGE)
     env.reset()
     from tqdm import tqdm

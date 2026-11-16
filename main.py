@@ -25,8 +25,8 @@ GAMMA = 0.999  # defined early so the env's reward normalizer and GAE can share 
 # COLUMN_HEIGHT = 8
 # SHELF_ROWS = 1
 # N_AGENTS = 2
-SHELF_COLUMNS = 3
-COLUMN_HEIGHT = 2
+SHELF_COLUMNS = 1
+COLUMN_HEIGHT = 6
 SHELF_ROWS = 1
 N_AGENTS = 2
 MSG_BITS = 0
@@ -78,7 +78,7 @@ critic = ValueOperator(module=critic_net, in_keys=["observation"])
 
 # --- PPO training setup ---
 FRAMES_PER_BATCH = 4000
-TOTAL_FRAMES = 5_000_000
+TOTAL_FRAMES = 15_000_000
 NUM_EPOCHS = 10
 MINIBATCH_SIZE = 400
 CLIP_EPSILON = 0.2
@@ -87,7 +87,7 @@ ENTROPY_COEF = 0.01
 LR = 3e-4
 MAX_GRAD_NORM = 1.0
 CHECKPOINT_EVERY = 50
-CHECKPOINT_DIR = Path("checkpoints14")
+CHECKPOINT_DIR = Path("checkpoints15")
 
 collector = Collector(
     env, policy, frames_per_batch=FRAMES_PER_BATCH, total_frames=TOTAL_FRAMES, device=device
