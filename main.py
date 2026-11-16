@@ -87,7 +87,7 @@ ENTROPY_COEF = 0.01
 LR = 3e-4
 MAX_GRAD_NORM = 1.0
 CHECKPOINT_EVERY = 50
-CHECKPOINT_DIR = Path("checkpoints15")
+CHECKPOINT_DIR = Path("checkpoints16")
 
 collector = Collector(
     env, policy, frames_per_batch=FRAMES_PER_BATCH, total_frames=TOTAL_FRAMES, device=device
@@ -202,4 +202,5 @@ checkpoints11 - Eleventh training run; tuning rewards to enable turning
 checkpoints12 - Twelfth training run; delta-based proximity reward. (Positive reward if agent comes closer to target; negative reward if agent moves farther from target)
 checkpoints13 - Thirteenth training run; potential-based delta proximity reward, sensor_range=1, GAMMA & LAMBDA set higher to consider more future rewards, constant per-step penalty, reward normalization
 checkpoints14 - Fourteenth training run; added relative target coords; Just random experiments, trying to get something that works
+checkpoints15 - Fifteenth training run; changed warehouse layout, changed observation vectors, changed reward system
 """

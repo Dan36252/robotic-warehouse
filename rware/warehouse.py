@@ -493,9 +493,9 @@ class Warehouse(gym.Env):
         observation_dict = OrderedDict(
                 {
                     #"location": location_space,
-                    #"carrying_shelf": gym.spaces.MultiBinary(1),
-                    #"direction": gym.spaces.Discrete(4),
-                    #"on_highway": gym.spaces.MultiBinary(1),
+                    "carrying_shelf": gym.spaces.MultiBinary(1),
+                    "direction": gym.spaces.Discrete(4),
+                    "on_highway": gym.spaces.MultiBinary(1),
                 }
             )
         
@@ -699,10 +699,11 @@ class Warehouse(gym.Env):
                 agent_y = agent.y
 
             # obs.write([agent_x, agent_y, int(agent.carrying_shelf is not None)])
-            # direction = np.zeros(4)
-            # direction[agent.dir.value] = 1.0
-            # obs.write(direction)
-            # obs.write([int(self._is_highway(agent.x, agent.y))])
+            obs.write([int(agent.carrying_shelf is not None)])
+            direction = np.zeros(4)
+            direction[agent.dir.value] = 1.0
+            obs.write(direction)
+            obs.write([int(self._is_highway(agent.x, agent.y))])
 
             dist_divisor = self.max_dist if self.normalised_coordinates else 1
             if self.include_target_distances:
@@ -710,8 +711,8 @@ class Warehouse(gym.Env):
 
             coord_divisor = self.max_grid_val if self.normalised_coordinates else 1
             if self.include_target_coords:
-                target = self._get_cur_target_coords(agent)
-                obs.write([target[0], target[1]])
+                target = agent.cur_target
+                obs.write([(target[0] - agent.x)/coord_divisor, (target[1] - agent.y)/coord_divisor])
                 # obs.write([
                 #     round(self.goals[0][0]/coord_divisor, 3) - agent_x,
                 #     round(self.goals[0][1]/coord_divisor, 3) - agent_y,
@@ -764,12 +765,12 @@ class Warehouse(gym.Env):
             agent_x = agent.x
             agent_y = agent.y
         # --- self data
-        # obs["self"] = {
-        #     "location": np.array([agent_x, agent_y], dtype=np.int32),
-        #     "carrying_shelf": [int(agent.carrying_shelf is not None)],
-        #     "direction": agent.dir.value,
-        #     "on_highway": [int(self._is_highway(agent.x, agent.y))]
-        # }
+        obs["self"] = {
+            #"location": np.array([agent_x, agent_y], dtype=np.int32),
+            "carrying_shelf": [int(agent.carrying_shelf is not None)],
+            "direction": agent.dir.value,
+            "on_highway": [int(self._is_highway(agent.x, agent.y))]
+        }
 
         dist_divisor = self.max_dist if self.normalised_coordinates else 1
         if self.include_target_distances:
@@ -779,8 +780,8 @@ class Warehouse(gym.Env):
 
         coord_divisor = self.max_grid_val if self.normalised_coordinates else 1
         if self.include_target_coords:
-            target = self._get_cur_target_coords(agent)
-            target_coords = [target[0], target[1]]
+            target = agent.cur_target
+            target_coords = [(target[0] - agent.x)/coord_divisor, (target[1] - agent.y)/coord_divisor]
             # target_coords = [
             #         round(self.goals[0][0]/coord_divisor, 3) - agent_x,
             #         round(self.goals[0][1]/coord_divisor, 3) - agent_y,
@@ -897,6 +898,7 @@ class Warehouse(gym.Env):
             no_longer_requested = (agent.current_mission == Mission.GET_PACKAGE and cur not in requested)
 
             if agent.current_mission != agent.prev_mission or no_longer_empty or no_longer_requested:
+                #print(f"Updated current target! {random.randint(0,9)}")
                 agent.cur_target = self._get_cur_target_coords(agent)
 
     def _update_cur_target_distances(self):
@@ -1380,7 +1382,7 @@ if __name__ == "__main__":
         actions[0] = current_action.value
         n_obs, reward, done, truncated, info = env.step(actions)
         current_action = Action.NOOP
-        #print(n_obs[0])
+        print(n_obs[0])
 
     def on_key_press(symbol, modifiers):
         global current_action
