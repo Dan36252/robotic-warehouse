@@ -18,13 +18,19 @@ from rware.warehouse import RewardType
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+GAMMA = 0.999  # defined early so the env's reward normalizer and GAE can share it
+
 # --- environment ---
+# SHELF_COLUMNS = 3
+# COLUMN_HEIGHT = 8
+# SHELF_ROWS = 1
+# N_AGENTS = 2
 SHELF_COLUMNS = 3
-COLUMN_HEIGHT = 8
+COLUMN_HEIGHT = 2
 SHELF_ROWS = 1
 N_AGENTS = 2
 MSG_BITS = 0
-SENSOR_RANGE = 0
+SENSOR_RANGE = 1
 INCLUDE_TARGET_DISTANCES = False
 INCLUDE_TARGET_COORDS = True
 REQUEST_QUEUE_SIZE = 2
@@ -47,13 +53,14 @@ env, nvec = make_centralized_env(
     MAX_STEPS,
     REWARD_TYPE,
     normalised_coordinates=NORMALISED_COORDINATES,
+    reward_gamma=GAMMA,
     device=device,
 )
 obs_dim = env.observation_spec["observation"].shape[-1]
 action_dim = sum(nvec)
 
 # --- policy and value networks ---
-actor_net = MLP(in_features=obs_dim, out_features=action_dim, depth=4, num_cells=512, device=device)
+actor_net = MLP(in_features=obs_dim, out_features=action_dim, depth=3, num_cells=512, device=device)
 #actor_net = MLP(in_features=obs_dim, out_features=action_dim, depth=2, num_cells=256, device=device)
 policy_module = TensorDictModule(actor_net, in_keys=["observation"], out_keys=["logits"])
 policy = ProbabilisticActor(
@@ -75,13 +82,12 @@ TOTAL_FRAMES = 5_000_000
 NUM_EPOCHS = 10
 MINIBATCH_SIZE = 400
 CLIP_EPSILON = 0.2
-GAMMA = 0.99
-LMBDA = 0.95
+LMBDA = 0.995
 ENTROPY_COEF = 0.01
 LR = 3e-4
 MAX_GRAD_NORM = 1.0
 CHECKPOINT_EVERY = 50
-CHECKPOINT_DIR = Path("checkpoints12")
+CHECKPOINT_DIR = Path("checkpoints14")
 
 collector = Collector(
     env, policy, frames_per_batch=FRAMES_PER_BATCH, total_frames=TOTAL_FRAMES, device=device
@@ -109,6 +115,7 @@ optim = torch.optim.Adam(loss_module.parameters(), lr=LR)
 CHECKPOINT_DIR.mkdir(exist_ok=True)
 LOG_DIR = Path("logs")
 LOG_DIR.mkdir(exist_ok=True)
+added_header = False
 
 start_batch = 0
 checkpoints = sorted(
@@ -158,15 +165,21 @@ if __name__ == "__main__":
 
         # Record reward and loss components, each against its batch number
         with open(LOG_DIR / "training_reward.txt", "a") as log_file:
+            if not added_header: log_file.write(CHECKPOINT_DIR.name+"\n")
             log_file.write(f"{mean_reward}\n")
         with open(LOG_DIR / "training_batch_nums.txt", "a") as log_file:
+            if not added_header: log_file.write(CHECKPOINT_DIR.name+"\n")
             log_file.write(f"{batch_idx}\n")
         with open(LOG_DIR / "loss_objective.txt", "a") as log_file:
+            if not added_header: log_file.write(CHECKPOINT_DIR.name+"\n")
             log_file.write(f"{mean_loss_objective}\n")
         with open(LOG_DIR / "loss_critic.txt", "a") as log_file:
+            if not added_header: log_file.write(CHECKPOINT_DIR.name+"\n")
             log_file.write(f"{mean_loss_critic}\n")
         with open(LOG_DIR / "loss_entropy.txt", "a") as log_file:
+            if not added_header: log_file.write(CHECKPOINT_DIR.name+"\n")
             log_file.write(f"{mean_loss_entropy}\n")
+        added_header = True
 
         if (batch_idx + 1) % CHECKPOINT_EVERY == 0:
             torch.save(
@@ -187,4 +200,6 @@ checkpoints9 - Ninth training run; larger Actor net; improved reward rules (prev
 checkpoints10 - Tenth training run; improved reward rules (prevent agents from walking back and forth past packages)
 checkpoints11 - Eleventh training run; tuning rewards to enable turning
 checkpoints12 - Twelfth training run; delta-based proximity reward. (Positive reward if agent comes closer to target; negative reward if agent moves farther from target)
+checkpoints13 - Thirteenth training run; potential-based delta proximity reward, sensor_range=1, GAMMA & LAMBDA set higher to consider more future rewards, constant per-step penalty, reward normalization
+checkpoints14 - Fourteenth training run; added relative target coords; Just random experiments, trying to get something that works
 """

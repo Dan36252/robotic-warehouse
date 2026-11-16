@@ -14,6 +14,25 @@ from rware.warehouse import Warehouse
 from torchrl.envs.libs.gym import GymWrapper
 
 
+class _RunningMeanStd:
+    """Welford's online algorithm for a running mean/variance estimate."""
+
+    def __init__(self):
+        self.mean = 0.0
+        self.m2 = 0.0
+        self.count = 0
+
+    def update(self, x: float):
+        self.count += 1
+        delta = x - self.mean
+        self.mean += delta / self.count
+        self.m2 += delta * (x - self.mean)
+
+    @property
+    def var(self) -> float:
+        return self.m2 / self.count if self.count > 1 else 1.0
+
+
 class CentralizedWarehouseEnv(gym.Wrapper):
     """Flattens rware's per-agent observation/action tuples into single joint
     vectors, turning the multi-agent warehouse into one large single-agent
@@ -21,11 +40,33 @@ class CentralizedWarehouseEnv(gym.Wrapper):
     observation, and action is a `MultiDiscrete` concatenating every agent's
     [movement, msg_bit, msg_bit, ...] sub-action. Reward is the mean of the
     per-agent rewards (identical under `RewardType.GLOBAL`).
+
+    Optionally normalizes that reward by a running estimate of the standard
+    deviation of the discounted return (the same approach as Stable-Baselines3's
+    `VecNormalize(norm_reward=True)`), so the critic always sees rewards on a
+    roughly consistent scale regardless of how large the environment's sparse
+    pickup/delivery bonuses are relative to the dense shaping reward. Only the
+    scale is adjusted -- the reward is never mean-shifted, since that would
+    distort the sign of the incentive.
     """
 
-    def __init__(self, env: Warehouse):
+    def __init__(
+        self,
+        env: Warehouse,
+        normalize_reward: bool = True,
+        reward_gamma: float = 0.99,
+        reward_clip: float = 10.0,
+        reward_epsilon: float = 1e-8,
+    ):
         super().__init__(env)
         self.n_agents = env.n_agents
+
+        self.normalize_reward = normalize_reward
+        self.reward_gamma = reward_gamma
+        self.reward_clip = reward_clip
+        self.reward_epsilon = reward_epsilon
+        self._discounted_return = 0.0
+        self._return_rms = _RunningMeanStd()
 
         sa_action_space = env.action_space[0]
         if isinstance(sa_action_space, gym.spaces.Discrete):
@@ -50,6 +91,7 @@ class CentralizedWarehouseEnv(gym.Wrapper):
 
     def reset(self, **kwargs):
         obs, info = self.env.reset(**kwargs)
+        self._discounted_return = 0.0
         return np.concatenate(obs).astype(np.float32), info
 
     def step(self, action):
@@ -60,18 +102,43 @@ class CentralizedWarehouseEnv(gym.Wrapper):
         )
         flat_obs = np.concatenate(obs).astype(np.float32)
         reward = float(np.mean(rewards))
+
+        if self.normalize_reward:
+            self._discounted_return = (
+                self._discounted_return * self.reward_gamma + reward
+            )
+            self._return_rms.update(self._discounted_return)
+            reward = reward / np.sqrt(self._return_rms.var + self.reward_epsilon)
+            if self.reward_clip is not None:
+                reward = float(np.clip(reward, -self.reward_clip, self.reward_clip))
+            if terminated or truncated:
+                self._discounted_return = 0.0
+
         return flat_obs, reward, terminated, truncated, info
 
 
-def make_centralized_env(*args, device=None, **kwargs) -> tuple[GymWrapper, list[int]]:
+def make_centralized_env(
+    *args,
+    device=None,
+    normalize_reward: bool = True,
+    reward_gamma: float = 0.99,
+    reward_clip: float = 10.0,
+    **kwargs,
+) -> tuple[GymWrapper, list[int]]:
     """Builds a `Warehouse` wrapped for centralized, TorchRL-based control.
 
-    Positional/keyword arguments are forwarded to `Warehouse.__init__`.
-    Returns the TorchRL env together with the flattened action cardinalities
-    (`nvec`), needed to build an `IndependentMultiCategorical` policy head.
+    Positional/keyword arguments (other than the reward-normalization options
+    above) are forwarded to `Warehouse.__init__`. Returns the TorchRL env
+    together with the flattened action cardinalities (`nvec`), needed to build
+    an `IndependentMultiCategorical` policy head.
     """
     env = Warehouse(*args, **kwargs)
-    env = CentralizedWarehouseEnv(env)
+    env = CentralizedWarehouseEnv(
+        env,
+        normalize_reward=normalize_reward,
+        reward_gamma=reward_gamma,
+        reward_clip=reward_clip,
+    )
     nvec = env.nvec
     return GymWrapper(env, categorical_action_encoding=True, device=device), nvec
 

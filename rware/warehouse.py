@@ -691,19 +691,19 @@ class Warehouse(gym.Env):
             coord_divisor = self.max_grid_val if self.normalised_coordinates else 1
             if self.include_target_coords:
                 obs.write([
-                    round(self.goals[0][0]/coord_divisor, 3),
-                    round(self.goals[0][1]/coord_divisor, 3),
-                    round(self.goals[1][0]/coord_divisor, 3),
-                    round(self.goals[1][1]/coord_divisor, 3)
+                    round(self.goals[0][0]/coord_divisor, 3) - agent_x,
+                    round(self.goals[0][1]/coord_divisor, 3) - agent_y,
+                    round(self.goals[1][0]/coord_divisor, 3) - agent_x,
+                    round(self.goals[1][1]/coord_divisor, 3) - agent_y
                     ])
                 package_coords = []
                 for pkg in self.request_queue:
-                    package_coords.extend([round(pkg.x/coord_divisor, 3), round(pkg.y/coord_divisor, 3)])
+                    package_coords.extend([round(pkg.x/coord_divisor, 3) - agent_x, round(pkg.y/coord_divisor, 3) - agent_y])
                 obs.write(package_coords)
 
                 empty_coords = []
                 for ex, ey in self._get_nearest_empty_shelf_coords(agent.x, agent.y, self.n_agents):
-                    empty_coords.extend([round(ex/coord_divisor, 3), round(ey/coord_divisor, 3)])
+                    empty_coords.extend([round(ex/coord_divisor, 3) - agent_x, round(ey/coord_divisor, 3) - agent_y])
                 obs.write(empty_coords)
 
             # 'has_agent': MultiBinary(1),
@@ -758,15 +758,15 @@ class Warehouse(gym.Env):
         coord_divisor = self.max_grid_val if self.normalised_coordinates else 1
         if self.include_target_coords:
             target_coords = [
-                    round(self.goals[0][0]/coord_divisor, 3),
-                    round(self.goals[0][1]/coord_divisor, 3),
-                    round(self.goals[1][0]/coord_divisor, 3),
-                    round(self.goals[1][1]/coord_divisor, 3)
+                    round(self.goals[0][0]/coord_divisor, 3) - agent_x,
+                    round(self.goals[0][1]/coord_divisor, 3) - agent_y,
+                    round(self.goals[1][0]/coord_divisor, 3) - agent_x,
+                    round(self.goals[1][1]/coord_divisor, 3) - agent_y
                     ]
             for pkg in self.request_queue:
-                target_coords.extend([round(pkg.x/coord_divisor, 3), round(pkg.y/coord_divisor, 3)])
+                target_coords.extend([round(pkg.x/coord_divisor, 3) - agent_x, round(pkg.y/coord_divisor, 3) - agent_y])
             for ex, ey in self._get_nearest_empty_shelf_coords(agent.x, agent.y, self.n_agents):
-                target_coords.extend([round(ex/coord_divisor, 3), round(ey/coord_divisor, 3)])
+                target_coords.extend([round(ex/coord_divisor, 3) - agent_x, round(ey/coord_divisor, 3) - agent_y])
             obs["self"]["target_coords"] = target_coords
 
         # find neighboring agents
@@ -916,21 +916,25 @@ class Warehouse(gym.Env):
             len_distances = max(1, len(distances))
             for dist, prev_dist in zip(distances, prev_distances):
                 if dist == 0:
-                    dist = 0.001
+                    dist = 0#0.001
                 if prev_dist - dist == 0:
                     continue
                 if use_delta_rewards:
                     # Reward is positive if agent comes closer to target; negative if walks farther away from target
-                    r = (1/(dist+0.15)) * ((prev_dist - dist) / (len_distances * abs(prev_dist - dist)))
+                    #r = (1/(dist+0.15)) * ((prev_dist - dist) / (len_distances * abs(prev_dist - dist)))
+                    #r = (5 / max(abs(prev_dist) + abs(dist), 0.01)) * (prev_dist - dist)
+                    r = 10 * (prev_dist - dist)
                 else:
                     # Reward is an absolute function of the agent's position; higher when closer to target
                     #r = min(0.01 / (dist**3 * 2 * len_distances), 1) if dist < 0.4 else 0
-                    r = min(0.2 / (dist * 2 * len_distances), 3) if dist < 0.4 else 0
+                    r = min(0.1 / dist, 3) if dist < 0.4 else 0
                 agent_dist_reward += r
             # This exists to force loop to continue before updating agent_dist_reward as seen in the comment after this if statement
             if agent_dist_reward == 0 or len(distances) == 0:
                 agent_dist_rewards.append(0)
                 continue
+            else:
+                agent_dist_reward = agent_dist_reward / len_distances
             #agent_dist_reward = -0.05 / (agent_dist_reward / max(len(distances), 1))
 
             agent_dist_rewards.append(agent_dist_reward)
@@ -1097,7 +1101,8 @@ class Warehouse(gym.Env):
                 
 
             agent.steps_since_success += 1
-            rewards[agent.id - 1] -= (agent.steps_since_success * 0.0001)
+            #rewards[agent.id - 1] -= (agent.steps_since_success * 0.0001)
+            #rewards[agent.id - 1] -= 0.005  # Constant per-step penalty
 
             if agent.req_action == Action.FORWARD:
                 agent.x, agent.y = agent.req_location(self.grid_size)
@@ -1293,7 +1298,7 @@ class Warehouse(gym.Env):
 
 
 if __name__ == "__main__":
-    env = Warehouse(3, 8, 1, 1, 0, 1, True, True, 2, None, None, RewardType.GLOBAL, normalised_coordinates=True)
+    env = Warehouse(3, 4, 1, 1, 0, 1, True, True, 1, None, None, RewardType.GLOBAL, normalised_coordinates=True)
     #env = Warehouse(1, 3, 1, 2, 0, 1, True, True, 2, None, 500, RewardType.TWO_STAGE)
     env.reset()
     from tqdm import tqdm
