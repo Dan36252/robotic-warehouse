@@ -21,16 +21,19 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 GAMMA = 0.99  # defined early so the env's reward normalizer and GAE can share it
 
 # --- environment ---
+# *** Standard:
 # SHELF_COLUMNS = 3
 # COLUMN_HEIGHT = 8
 # SHELF_ROWS = 1
-# N_AGENTS = 2
-SHELF_COLUMNS = 1
-COLUMN_HEIGHT = 3
+
+SHELF_COLUMNS = 3
+COLUMN_HEIGHT = 8
 SHELF_ROWS = 1
-N_AGENTS = 1
+N_AGENTS = 2
 MSG_BITS = 0
 SENSOR_RANGE = 1
+LOCATION_RELATIVE = True
+DIRECTION_RELATIVE = True
 INCLUDE_TARGET_DISTANCES = False
 INCLUDE_TARGET_COORDS = False
 REQUEST_QUEUE_SIZE = 2
@@ -46,6 +49,8 @@ env, nvec = make_centralized_env(
     N_AGENTS,
     MSG_BITS,
     SENSOR_RANGE,
+    LOCATION_RELATIVE,
+    DIRECTION_RELATIVE,
     INCLUDE_TARGET_DISTANCES,
     INCLUDE_TARGET_COORDS,
     REQUEST_QUEUE_SIZE,
@@ -87,7 +92,7 @@ ENTROPY_COEF = 0.01
 LR = 3e-4
 MAX_GRAD_NORM = 1.0
 CHECKPOINT_EVERY = 50
-CHECKPOINT_DIR = Path("checkpoints22")
+CHECKPOINT_DIR = Path("checkpoints25")
 
 collector = Collector(
     env, policy, frames_per_batch=FRAMES_PER_BATCH, total_frames=TOTAL_FRAMES, device=device
@@ -209,5 +214,8 @@ checkpoints18 - No distance based rewards
 checkpoints19 - Back to purely sparse rewards
 checkpoints20 - Back to default observations
 checkpoints21 - shelf collisions enabled
-checkpoints22 - trying only one agent
+checkpoints22 - Still tiny warehouse, added relative target coords
+checkpoints23 - Added target distance potential award
+checkpoints24 - Removed target distance potential award; added stand-still penalty
+checkpoints25 - Standard small warehouse, stand-still penalty, target distance potential; agent location and direction are relative, not absolute, in observation
 """

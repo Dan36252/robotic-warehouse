@@ -14,6 +14,11 @@ _COLLISION_LAYERS = 2
 _LAYER_AGENTS = 0
 _LAYER_SHELFS = 1
 
+# Reward Settings
+TARGET_DIST_AWARD = True
+STANDSTILL_PENALTY = 0.1
+PER_STEP_PENALTY = 0
+
 
 class _VectorWriter:
     def __init__(self, size: int):
@@ -170,6 +175,8 @@ class Warehouse(gym.Env):
         n_agents: int,
         msg_bits: int,
         sensor_range: int,
+        location_relative: bool,
+        direction_relative: bool,
         include_target_distances: bool,
         include_target_coords: bool,
         request_queue_size: int,
@@ -264,6 +271,8 @@ class Warehouse(gym.Env):
         self.n_agents = n_agents
         self.msg_bits = msg_bits
         self.sensor_range = sensor_range
+        self.location_relative = location_relative
+        self.direction_relative = direction_relative
         self.include_target_distances = include_target_distances
         self.include_target_coords = include_target_coords
         self.max_inactivity_steps: Optional[int] = max_inactivity_steps
@@ -343,7 +352,7 @@ class Warehouse(gym.Env):
                 is_on_vertical_highway
                 or is_on_horizontal_highway
                 or is_on_delivery_row
-                #or is_on_queue
+                or is_on_queue
             )
 
         for x in range(self.grid_size[1]):
@@ -650,7 +659,26 @@ class Warehouse(gym.Env):
             # Get the nearest empty shelf's coordinates
             coords = self._get_nearest_empty_shelf_coords(agent.x, agent.y, 1)[0]
             return (coords[0], coords[1])#((coords[0] - agent.x)/divisor, (coords[1] - agent.y)/divisor)
-
+    
+    def _get_vector_from_dir(self, agent, dir: Direction):
+        # Unused method
+        cycle_dir = [Direction.UP, Direction.RIGHT, Direction.DOWN, Direction.LEFT]
+        req_index = (cycle_dir.index(agent.dir) + cycle_dir.index(dir)) % len(cycle_dir)
+        req_dir = cycle_dir[req_index]
+        if req_dir == Direction.UP:
+            return (0, -1)
+        elif req_dir == Direction.RIGHT:
+            return (1, 0)
+        elif req_dir == Direction.DOWN:
+            return (0, 1)
+        elif req_dir == Direction.LEFT:
+            return (-1, 0)
+        
+    def _absolute_dir_to_relative(self, agent, dir: Direction):
+        cycle_dir = [Direction.UP, Direction.RIGHT, Direction.DOWN, Direction.LEFT]
+        req_index = (cycle_dir.index(dir) - cycle_dir.index(agent.dir)) % 4
+        if req_index < 0: req_index = req_index + 4
+        return cycle_dir[req_index]
 
     def _get_default_obs(self, agent):
         min_x = agent.x - self.sensor_range
@@ -691,43 +719,63 @@ class Warehouse(gym.Env):
             flatdim = gym.spaces.flatdim(self.observation_space[agent.id - 1])
             obs = _VectorWriter(flatdim)
 
+            # Agent location
+            agent_x = agent.x
+            agent_y = agent.y
+
+            if self.location_relative:
+                target = agent.cur_target
+                agent_x = target[0] - agent_x
+                agent_y = target[1] - agent_y
+
             if self.normalised_coordinates:
-                agent_x = agent.x / (self.grid_size[1] - 1)
-                agent_y = agent.y / (self.grid_size[0] - 1)
-            else:
-                agent_x = agent.x
-                agent_y = agent.y
+                agent_x = agent_x / (self.grid_size[1] - 1)
+                agent_y = agent_y / (self.grid_size[0] - 1)
 
             obs.write([agent_x, agent_y, int(agent.carrying_shelf is not None)])
-            #obs.write([int(agent.carrying_shelf is not None)])
+
+            # Agent direction
             direction = np.zeros(4)
-            direction[agent.dir.value] = 1.0
+            if self.direction_relative:
+                offset = (agent.cur_target[0] - agent.x, agent.cur_target[1] - agent.y)
+                x_comp = (Direction.RIGHT if offset[0] > 0 else Direction.LEFT) if offset[0] != 0 else None
+                y_comp = (Direction.DOWN if offset[1] > 0 else Direction.UP) if offset[1] != 0 else None
+                if x_comp:
+                    direction[self._absolute_dir_to_relative(agent, x_comp).value] = 1.0
+                if y_comp:
+                    direction[self._absolute_dir_to_relative(agent, y_comp).value] = 1.0
+            else:
+                direction[agent.dir.value] = 1.0
+            # print("Direction:")
+            # print(direction)
             obs.write(direction)
+
+            # Agent is on highway
             obs.write([int(self._is_highway(agent.x, agent.y))])
 
+            # Agent target distances
             dist_divisor = self.max_dist if self.normalised_coordinates else 1
             if self.include_target_distances:
                 obs.write([round(d/dist_divisor, 2) for d in agent.target_distances])
 
+            # Agent target coordinates
             coord_divisor = self.max_grid_val if self.normalised_coordinates else 1
             if self.include_target_coords:
-                target = agent.cur_target
-                obs.write([(target[0] - agent.x)/coord_divisor, (target[1] - agent.y)/coord_divisor])
-                # obs.write([
-                #     round(self.goals[0][0]/coord_divisor, 3) - agent_x,
-                #     round(self.goals[0][1]/coord_divisor, 3) - agent_y,
-                #     round(self.goals[1][0]/coord_divisor, 3) - agent_x,
-                #     round(self.goals[1][1]/coord_divisor, 3) - agent_y
-                #     ])
-                # package_coords = []
-                # for pkg in self.request_queue:
-                #     package_coords.extend([round(pkg.x/coord_divisor, 3) - agent_x, round(pkg.y/coord_divisor, 3) - agent_y])
-                # obs.write(package_coords)
+                obs.write([
+                    round(self.goals[0][0]/coord_divisor, 3) - agent_x,
+                    round(self.goals[0][1]/coord_divisor, 3) - agent_y,
+                    round(self.goals[1][0]/coord_divisor, 3) - agent_x,
+                    round(self.goals[1][1]/coord_divisor, 3) - agent_y
+                    ])
+                package_coords = []
+                for pkg in self.request_queue:
+                    package_coords.extend([round(pkg.x/coord_divisor, 3) - agent_x, round(pkg.y/coord_divisor, 3) - agent_y])
+                obs.write(package_coords)
 
-                # empty_coords = []
-                # for ex, ey in self._get_nearest_empty_shelf_coords(agent.x, agent.y, self.n_agents):
-                #     empty_coords.extend([round(ex/coord_divisor, 3) - agent_x, round(ey/coord_divisor, 3) - agent_y])
-                # obs.write(empty_coords)
+                empty_coords = []
+                for ex, ey in self._get_nearest_empty_shelf_coords(agent.x, agent.y, self.n_agents):
+                    empty_coords.extend([round(ex/coord_divisor, 3) - agent_x, round(ey/coord_divisor, 3) - agent_y])
+                obs.write(empty_coords)
 
             # 'has_agent': MultiBinary(1),
             # 'direction': Discrete(4),
@@ -1149,7 +1197,7 @@ class Warehouse(gym.Env):
             agent.stood_still = False
             if (agent.x == prev_x and agent.y == prev_y):
                 if not (((agent.req_action == Action.LEFT or agent.req_action == Action.RIGHT) and agent.steps_stood_still < 2) or (agent.req_action == Action.TOGGLE_LOAD and agent.steps_stood_still < 1)): # not (agent.req_action == Action.TOGGLE_LOAD and agent.steps_stood_still == 0):
-                    #rewards[agent.id - 1] = -0.1 # PENALTY for staying in place
+                    rewards[agent.id - 1] = -0.1 # PENALTY for staying in place
                     agent.stood_still = True
                 agent.steps_stood_still += 1
             else:
@@ -1164,7 +1212,7 @@ class Warehouse(gym.Env):
 
             agent.steps_since_success += 1
             #rewards[agent.id - 1] -= (agent.steps_since_success * 0.0001)
-            #rewards[agent.id - 1] -= 0.005  # Constant per-step penalty
+            rewards[agent.id - 1] -= PER_STEP_PENALTY  # Constant per-step penalty
 
             if agent.req_action == Action.FORWARD:
                 agent.x, agent.y = agent.req_location(self.grid_size)
@@ -1185,7 +1233,7 @@ class Warehouse(gym.Env):
                         agent.can_take_order = False
                     else:
                         agent.current_mission = Mission.RETURN_PACKAGE
-                        #rewards[agent.id - 1] -= 5.0  # PENALTY for picking up unrequested package
+                        rewards[agent.id - 1] -= STANDSTILL_PENALTY  # PENALTY for picking up unrequested package
             elif agent.req_action == Action.TOGGLE_LOAD and agent.carrying_shelf:
                 #agent.reached_target = False
                 if not self._is_highway(agent.x, agent.y):
@@ -1253,8 +1301,10 @@ class Warehouse(gym.Env):
 
         self._update_agent_cur_targets()
         self._update_cur_target_distances()
-        #for i, r in enumerate(self._get_single_target_rewards()):
-            #rewards[i] += r
+
+        if TARGET_DIST_AWARD:
+            for i, r in enumerate(self._get_single_target_rewards()):
+                rewards[i] += r
         
         for agent in self.agents:
             agent.prev_mission = agent.current_mission
@@ -1369,7 +1419,7 @@ class Warehouse(gym.Env):
 
 
 if __name__ == "__main__":
-    env = Warehouse(3, 4, 1, 1, 0, 1, False, True, 1, None, None, RewardType.GLOBAL, normalised_coordinates=True)
+    env = Warehouse(3, 4, 1, 1, 0, 0, True, True, False, False, 1, None, None, RewardType.GLOBAL, normalised_coordinates=True)
     #env = Warehouse(1, 3, 1, 2, 0, 1, True, True, 2, None, 500, RewardType.TWO_STAGE)
     env.reset()
     from tqdm import tqdm
