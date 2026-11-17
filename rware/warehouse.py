@@ -1019,17 +1019,24 @@ class Warehouse(gym.Env):
         ]
 
         # spawn agents at random locations
-        agent_locs = self.np_random.choice(
-            np.arange(self.grid_size[0] * self.grid_size[1]),
-            size=self.n_agents,
-            replace=False,
-        )
-        agent_locs = np.unravel_index(agent_locs, self.grid_size)
+        # agent_locs = self.np_random.choice(
+        #     np.arange(self.grid_size[0] * self.grid_size[1]),
+        #     size=self.n_agents,
+        #     replace=False,
+        # )
+        # agent_locs = np.unravel_index(agent_locs, self.grid_size)
+        available_locs = []
+        for x in range(self.grid_size[1]):
+            for y in range(self.grid_size[0]):
+                if self._is_highway(x, y):
+                    available_locs.append((x, y))
+        chosen_indices = random.sample(range(0, len(available_locs)), self.n_agents)
+        agent_locs = [available_locs[i] for i in chosen_indices]
         # and direction
         agent_dirs = self.np_random.choice([d for d in Direction], size=self.n_agents)
         self.agents = [
             Agent(x, y, dir_, self.msg_bits)
-            for y, x, dir_ in zip(*agent_locs, agent_dirs)
+            for (x, y), dir_ in zip(agent_locs, agent_dirs)
         ]
 
         self._recalc_grid()
@@ -1072,6 +1079,7 @@ class Warehouse(gym.Env):
         commited_agents = set()
 
         G = nx.DiGraph()
+        requested_coords = [(s.x, s.y) for s in self.request_queue]
 
         for agent in self.agents:
             start = agent.x, agent.y
@@ -1079,9 +1087,9 @@ class Warehouse(gym.Env):
             target = agent.req_location(self.grid_size)
 
             if (
-                agent.carrying_shelf
-                and start != target
-                and self.grid[_LAYER_SHELFS, target[1], target[0]]
+                #agent.carrying_shelf
+                start != target
+                and (self.grid[_LAYER_SHELFS, target[1], target[0]] and not (target[0], target[1]) in requested_coords)
                 and not (
                     self.grid[_LAYER_AGENTS, target[1], target[0]]
                     and self.agents[

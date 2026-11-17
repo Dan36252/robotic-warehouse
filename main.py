@@ -18,7 +18,7 @@ from rware.warehouse import RewardType
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-GAMMA = 0.999  # defined early so the env's reward normalizer and GAE can share it
+GAMMA = 0.99  # defined early so the env's reward normalizer and GAE can share it
 
 # --- environment ---
 # SHELF_COLUMNS = 3
@@ -28,7 +28,7 @@ GAMMA = 0.999  # defined early so the env's reward normalizer and GAE can share 
 SHELF_COLUMNS = 1
 COLUMN_HEIGHT = 3
 SHELF_ROWS = 1
-N_AGENTS = 2
+N_AGENTS = 1
 MSG_BITS = 0
 SENSOR_RANGE = 1
 INCLUDE_TARGET_DISTANCES = False
@@ -82,12 +82,12 @@ TOTAL_FRAMES = 15_000_000
 NUM_EPOCHS = 10
 MINIBATCH_SIZE = 400
 CLIP_EPSILON = 0.2
-LMBDA = 0.995
+LMBDA = 0.95
 ENTROPY_COEF = 0.01
 LR = 3e-4
 MAX_GRAD_NORM = 1.0
 CHECKPOINT_EVERY = 50
-CHECKPOINT_DIR = Path("checkpoints20")
+CHECKPOINT_DIR = Path("checkpoints22")
 
 collector = Collector(
     env, policy, frames_per_batch=FRAMES_PER_BATCH, total_frames=TOTAL_FRAMES, device=device
@@ -208,4 +208,6 @@ checkpoints17 - Seventeenth training run; same as 16, just one reward change
 checkpoints18 - No distance based rewards
 checkpoints19 - Back to purely sparse rewards
 checkpoints20 - Back to default observations
+checkpoints21 - shelf collisions enabled
+checkpoints22 - trying only one agent
 """
